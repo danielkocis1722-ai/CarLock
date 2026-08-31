@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import {
+  AppState,
   PermissionsAndroid,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   View,
@@ -12,30 +14,49 @@ import CarlockBluetoothModule from "../../modules/carlock-bluetooth/src/CarlockB
 
 export default function HomeScreen() {
   const [carDevice, setCarDevice] = useState<any>(null);
+
   const [isConnected, setIsConnected] = useState(false);
+  const [isLocked, setIsLocked] = useState(true);
+
   const [error, setError] = useState("");
 
   useEffect(() => {
     setupCar();
 
-    const checkInitialState = async () => {
-      const connected = await CarlockBluetoothModule.isCarConnected();
-
-      setIsConnected(connected);
-    };
-
-    checkInitialState();
-
-    const subscription = CarlockBluetoothModule.addListener(
+    // Native Bluetooth event:
+    // CITROEN connected / disconnected
+    const bluetoothSubscription = CarlockBluetoothModule.addListener(
       "onCarConnectionChanged",
       (event) => {
         console.log("Car Bluetooth event:", event);
+
         setIsConnected(event.connected);
+
+        // Ak sa auto pripojilo, určite ho práve používame.
+        // Preto ho považujeme za UNLOCKED.
+        if (event.connected) {
+          setIsLocked(false);
+        }
       },
     );
 
+    // Keď sa vrátime do CarLocku z backgroundu,
+    // znova skontrolujeme aktuálny Bluetooth stav.
+    const appStateSubscription = AppState.addEventListener(
+      "change",
+      async (nextState) => {
+        if (nextState === "active") {
+          await refreshConnectionState();
+        }
+      },
+    );
+
+    // Initial check pri otvorení appky.
+    refreshConnectionState();
+
     return () => {
-      subscription.remove();
+      bluetoothSubscription.remove();
+      appStateSubscription.remove();
     };
   }, []);
 
@@ -85,6 +106,26 @@ export default function HomeScreen() {
     }
   };
 
+  const refreshConnectionState = async () => {
+    try {
+      const connected = await CarlockBluetoothModule.isCarConnected();
+
+      console.log("Current Bluetooth connection:", connected);
+
+      setIsConnected(connected);
+
+      if (connected) {
+        setIsLocked(false);
+      }
+    } catch (err: any) {
+      console.log("Bluetooth refresh error:", err);
+    }
+  };
+
+  const confirmLocked = () => {
+    setIsLocked(true);
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.logo}>CarLock</Text>
@@ -94,31 +135,55 @@ export default function HomeScreen() {
           {carDevice ? carDevice.name : "Searching for car..."}
         </Text>
 
-        <View
-          style={[
-            styles.statusDot,
-            {
-              backgroundColor: isConnected ? "#5EDB8A" : "#FF5C1D",
-            },
-          ]}
-        />
+        <Text style={styles.smallLabel}>Your car is</Text>
 
         <Text
           style={[
-            styles.connectionStatus,
+            styles.lockStatus,
             {
-              color: isConnected ? "#5EDB8A" : "#FF5C1D",
+              color: isLocked ? "#5EDB8A" : "#FF5C1D",
             },
           ]}
         >
-          {isConnected ? "CONNECTED" : "DISCONNECTED"}
+          {isLocked ? "LOCKED" : "UNLOCKED"}
         </Text>
 
-        <Text style={styles.description}>
-          {isConnected
-            ? "CarLock detects your car."
-            : "Your car is not currently connected."}
-        </Text>
+        <View style={styles.connectionRow}>
+          <View
+            style={[
+              styles.statusDot,
+              {
+                backgroundColor: isConnected ? "#5EDB8A" : "#7084A8",
+              },
+            ]}
+          />
+
+          <Text style={styles.connectionText}>
+            CITROEN {isConnected ? "connected" : "disconnected"}
+          </Text>
+        </View>
+
+        {!isLocked && !isConnected && (
+          <View style={styles.warning}>
+            <Text style={styles.warningText}>
+              Your car disconnected, but locking has not been confirmed.
+            </Text>
+          </View>
+        )}
+
+        {!isLocked && (
+          <Pressable
+            style={({ pressed }) => [
+              styles.lockButton,
+              pressed && {
+                opacity: 0.8,
+              },
+            ]}
+            onPress={confirmLocked}
+          >
+            <Text style={styles.lockButtonText}>I locked the car</Text>
+          </Pressable>
+        )}
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
       </View>
@@ -136,18 +201,18 @@ const styles = StyleSheet.create({
   },
 
   logo: {
-    fontSize: 34,
+    fontSize: 38,
     fontWeight: "800",
     color: "#EAF4FF",
-    marginBottom: 30,
+    marginBottom: 32,
     letterSpacing: 1,
   },
 
   card: {
     width: "100%",
-    maxWidth: 360,
+    maxWidth: 370,
     backgroundColor: "#10264F",
-    borderRadius: 24,
+    borderRadius: 26,
     padding: 28,
     alignItems: "center",
     borderWidth: 1,
@@ -156,28 +221,69 @@ const styles = StyleSheet.create({
 
   carName: {
     color: "#EAF4FF",
-    fontSize: 24,
+    fontSize: 23,
     fontWeight: "800",
+    marginBottom: 34,
+  },
+
+  smallLabel: {
+    color: "#9FB7D9",
+    fontSize: 17,
+    marginBottom: 10,
+  },
+
+  lockStatus: {
+    fontSize: 42,
+    fontWeight: "900",
+    marginBottom: 30,
+  },
+
+  connectionRow: {
+    flexDirection: "row",
+    alignItems: "center",
     marginBottom: 24,
   },
 
   statusDot: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    marginBottom: 16,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 9,
   },
 
-  connectionStatus: {
-    fontSize: 28,
-    fontWeight: "800",
-    marginBottom: 12,
-  },
-
-  description: {
+  connectionText: {
     color: "#9FB7D9",
     fontSize: 15,
+  },
+
+  warning: {
+    width: "100%",
+    backgroundColor: "rgba(255, 92, 29, 0.10)",
+    borderWidth: 1,
+    borderColor: "#FF5C1D",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 18,
+  },
+
+  warningText: {
+    color: "#FFB092",
     textAlign: "center",
+    lineHeight: 20,
+  },
+
+  lockButton: {
+    width: "100%",
+    backgroundColor: "#2F66C2",
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: "center",
+  },
+
+  lockButtonText: {
+    color: "#EAF4FF",
+    fontSize: 17,
+    fontWeight: "700",
   },
 
   error: {
