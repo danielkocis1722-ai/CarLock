@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["CarlockBluetoothModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.carlockbluetooth.CarlockBluetoothModule"]
+  }
+}

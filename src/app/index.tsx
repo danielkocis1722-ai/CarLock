@@ -1,98 +1,188 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useEffect, useState } from "react";
+import {
+  PermissionsAndroid,
+  Platform,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
-  return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
-  );
-}
+import RNBluetoothClassic from "react-native-bluetooth-classic";
+import CarlockBluetoothModule from "../../modules/carlock-bluetooth/src/CarlockBluetoothModule";
 
 export default function HomeScreen() {
+  const [carDevice, setCarDevice] = useState<any>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setupCar();
+
+    const checkInitialState = async () => {
+      const connected = await CarlockBluetoothModule.isCarConnected();
+
+      setIsConnected(connected);
+    };
+
+    checkInitialState();
+
+    const subscription = CarlockBluetoothModule.addListener(
+      "onCarConnectionChanged",
+      (event) => {
+        console.log("Car Bluetooth event:", event);
+        setIsConnected(event.connected);
+      },
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  const requestBluetoothPermissions = async () => {
+    if (Platform.OS !== "android") return true;
+
+    if (Platform.Version >= 31) {
+      const result = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+      ]);
+
+      return (
+        result["android.permission.BLUETOOTH_CONNECT"] ===
+          PermissionsAndroid.RESULTS.GRANTED &&
+        result["android.permission.BLUETOOTH_SCAN"] ===
+          PermissionsAndroid.RESULTS.GRANTED
+      );
+    }
+
+    return true;
+  };
+
+  const setupCar = async () => {
+    try {
+      const granted = await requestBluetoothPermissions();
+
+      if (!granted) {
+        setError("Bluetooth permission denied.");
+        return;
+      }
+
+      const devices = await RNBluetoothClassic.getBondedDevices();
+
+      const citroen = devices.find(
+        (device: any) => device.name?.trim().toUpperCase() === "CITROEN",
+      );
+
+      if (!citroen) {
+        setError("CITROEN was not found in paired devices.");
+        return;
+      }
+
+      setCarDevice(citroen);
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    }
+  };
+
   return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
-          </ThemedText>
-        </ThemedView>
+    <View style={styles.container}>
+      <Text style={styles.logo}>CarLock</Text>
 
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
+      <View style={styles.card}>
+        <Text style={styles.carName}>
+          {carDevice ? carDevice.name : "Searching for car..."}
+        </Text>
 
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
+        <View
+          style={[
+            styles.statusDot,
+            {
+              backgroundColor: isConnected ? "#5EDB8A" : "#FF5C1D",
+            },
+          ]}
+        />
 
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
-    </ThemedView>
+        <Text
+          style={[
+            styles.connectionStatus,
+            {
+              color: isConnected ? "#5EDB8A" : "#FF5C1D",
+            },
+          ]}
+        >
+          {isConnected ? "CONNECTED" : "DISCONNECTED"}
+        </Text>
+
+        <Text style={styles.description}>
+          {isConnected
+            ? "CarLock detects your car."
+            : "Your car is not currently connected."}
+        </Text>
+
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
-    flexDirection: 'row',
+    backgroundColor: "#081B3A",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
   },
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
+
+  logo: {
+    fontSize: 34,
+    fontWeight: "800",
+    color: "#EAF4FF",
+    marginBottom: 30,
+    letterSpacing: 1,
   },
-  heroSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
+
+  card: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "#10264F",
+    borderRadius: 24,
+    padding: 28,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#214B8F",
   },
-  title: {
-    textAlign: 'center',
+
+  carName: {
+    color: "#EAF4FF",
+    fontSize: 24,
+    fontWeight: "800",
+    marginBottom: 24,
   },
-  code: {
-    textTransform: 'uppercase',
+
+  statusDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    marginBottom: 16,
   },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
+
+  connectionStatus: {
+    fontSize: 28,
+    fontWeight: "800",
+    marginBottom: 12,
+  },
+
+  description: {
+    color: "#9FB7D9",
+    fontSize: 15,
+    textAlign: "center",
+  },
+
+  error: {
+    color: "#FF5C1D",
+    marginTop: 18,
+    textAlign: "center",
   },
 });
