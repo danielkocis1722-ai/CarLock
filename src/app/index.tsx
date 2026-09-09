@@ -23,39 +23,69 @@ export default function HomeScreen() {
   useEffect(() => {
     setupCar();
 
-    // Native Bluetooth event:
-    // CITROEN connected / disconnected
+    const loadStoredState = async () => {
+      try {
+        const stored = await CarlockBluetoothModule.getStoredState();
+
+        setIsConnected(stored.connected);
+        setIsLocked(stored.locked);
+
+        await refreshConnectionState();
+      } catch (err) {
+        console.log("Stored state error:", err);
+      }
+    };
+
+    loadStoredState();
+
     const bluetoothSubscription = CarlockBluetoothModule.addListener(
       "onCarConnectionChanged",
-      (event) => {
+      async (event) => {
         console.log("Car Bluetooth event:", event);
 
         setIsConnected(event.connected);
 
-        // Ak sa auto pripojilo, určite ho práve používame.
-        // Preto ho považujeme za UNLOCKED.
         if (event.connected) {
           setIsLocked(false);
         }
       },
     );
 
-    // Keď sa vrátime do CarLocku z backgroundu,
-    // znova skontrolujeme aktuálny Bluetooth stav.
+    const bluetoothStateSubscription = CarlockBluetoothModule.addListener(
+      "onBluetoothStateChanged",
+      async (event) => {
+        console.log("Bluetooth enabled:", event.enabled);
+
+        if (event.enabled) {
+          const stored = await CarlockBluetoothModule.getStoredState();
+
+          setIsConnected(stored.connected);
+          setIsLocked(stored.locked);
+        } else {
+          setIsConnected(false);
+
+          // locked stav nemeníme
+        }
+      },
+    );
+
     const appStateSubscription = AppState.addEventListener(
       "change",
       async (nextState) => {
         if (nextState === "active") {
+          const stored = await CarlockBluetoothModule.getStoredState();
+
+          setIsConnected(stored.connected);
+          setIsLocked(stored.locked);
+
           await refreshConnectionState();
         }
       },
     );
 
-    // Initial check pri otvorení appky.
-    refreshConnectionState();
-
     return () => {
       bluetoothSubscription.remove();
+      bluetoothStateSubscription.remove();
       appStateSubscription.remove();
     };
   }, []);
@@ -108,22 +138,21 @@ export default function HomeScreen() {
 
   const refreshConnectionState = async () => {
     try {
-      const connected = await CarlockBluetoothModule.isCarConnected();
+      const stored = await CarlockBluetoothModule.getStoredState();
 
-      console.log("Current Bluetooth connection:", connected);
+      console.log("Current stored Bluetooth state:", stored);
 
-      setIsConnected(connected);
-
-      if (connected) {
-        setIsLocked(false);
-      }
+      setIsConnected(stored.connected);
+      setIsLocked(stored.locked);
     } catch (err: any) {
       console.log("Bluetooth refresh error:", err);
     }
   };
 
-  const confirmLocked = () => {
+  const confirmLocked = async () => {
     setIsLocked(true);
+
+    await CarlockBluetoothModule.setLocked(true);
   };
 
   return (

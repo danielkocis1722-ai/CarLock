@@ -13,6 +13,8 @@ export type CarlockState = {
 
 type CarlockBluetoothEvents = {
   onCarConnectionChanged: (event: CarConnectionChangedEvent) => void;
+
+  onBluetoothStateChanged: (event: { enabled: boolean }) => void;
 };
 
 declare class CarlockBluetoothModule extends NativeModule<CarlockBluetoothEvents> {
