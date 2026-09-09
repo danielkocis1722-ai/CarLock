@@ -24,22 +24,25 @@ class CarlockBluetoothModule : Module() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent == null) return
 
-            // Bluetooth adapter ON / OFF
+            // Bluetooth telefónu ON / OFF
             if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
                 val state: Int = intent.getIntExtra(
                     BluetoothAdapter.EXTRA_STATE,
                     BluetoothAdapter.ERROR
                 )
 
+                val enabled =
+                    state == BluetoothAdapter.STATE_ON
+
                 Log.d(
                     "CarLockBT",
-                    "Bluetooth adapter state=$state"
+                    "Bluetooth adapter state=$state enabled=$enabled"
                 )
 
                 sendEvent(
                     "onBluetoothStateChanged",
                     bundleOf(
-                        "enabled" to (state == BluetoothAdapter.STATE_ON)
+                        "enabled" to enabled
                     )
                 )
 
@@ -57,7 +60,7 @@ class CarlockBluetoothModule : Module() {
                 "LIVE event=${intent.action}, device=$name"
             )
 
-            // Ignoruj všetko okrem CITROEN
+            // Ignorujeme všetko okrem CITROEN
             if (name?.trim()?.uppercase() != "CITROEN") {
                 return
             }
@@ -143,8 +146,70 @@ class CarlockBluetoothModule : Module() {
             "onBluetoothStateChanged"
         )
 
+        //
+        // Je Bluetooth telefónu momentálne zapnutý?
+        //
+        AsyncFunction("isBluetoothEnabled") {
+            val adapter =
+                BluetoothAdapter.getDefaultAdapter()
+
+            if (adapter == null) {
+                return@AsyncFunction false
+            }
+
+            return@AsyncFunction try {
+                adapter.isEnabled
+            } catch (_: SecurityException) {
+                false
+            }
+        }
+
+        //
+        // Otvor Android systémový dialóg
+        // na zapnutie Bluetooth.
+        //
+        AsyncFunction("requestEnableBluetooth") {
+            val activity =
+                appContext.currentActivity
+                    ?: return@AsyncFunction false
+
+            val adapter =
+                BluetoothAdapter.getDefaultAdapter()
+                    ?: return@AsyncFunction false
+
+            try {
+                if (adapter.isEnabled) {
+                    return@AsyncFunction true
+                }
+
+                val enableIntent =
+                    Intent(
+                        BluetoothAdapter.ACTION_REQUEST_ENABLE
+                    )
+
+                activity.startActivity(
+                    enableIntent
+                )
+
+                Log.d(
+                    "CarLockBT",
+                    "Requested Bluetooth enable dialog"
+                )
+
+                return@AsyncFunction true
+            } catch (e: SecurityException) {
+                Log.d(
+                    "CarLockBT",
+                    "Bluetooth enable request failed=${e.message}"
+                )
+
+                return@AsyncFunction false
+            }
+        }
+
         AsyncFunction("getStoredState") {
-            val context = appContext.reactContext
+            val context =
+                appContext.reactContext
 
             if (context == null) {
                 return@AsyncFunction mapOf<String, Any?>(
@@ -155,10 +220,11 @@ class CarlockBluetoothModule : Module() {
                 )
             }
 
-            val prefs = context.getSharedPreferences(
-                "carlock_state",
-                Context.MODE_PRIVATE
-            )
+            val prefs =
+                context.getSharedPreferences(
+                    "carlock_state",
+                    Context.MODE_PRIVATE
+                )
 
             return@AsyncFunction mapOf<String, Any?>(
                 "connected" to prefs.getBoolean(
@@ -182,8 +248,9 @@ class CarlockBluetoothModule : Module() {
 
         AsyncFunction("setLocked") { locked: Boolean ->
 
-            val context = appContext.reactContext
-                ?: return@AsyncFunction
+            val context =
+                appContext.reactContext
+                    ?: return@AsyncFunction
 
             context
                 .getSharedPreferences(
@@ -314,12 +381,13 @@ class CarlockBluetoothModule : Module() {
         val context =
             appContext.reactContext ?: return
 
-        val editor = context
-            .getSharedPreferences(
-                "carlock_state",
-                Context.MODE_PRIVATE
-            )
-            .edit()
+        val editor =
+            context
+                .getSharedPreferences(
+                    "carlock_state",
+                    Context.MODE_PRIVATE
+                )
+                .edit()
 
         editor.putBoolean(
             "connected",
@@ -340,8 +408,8 @@ class CarlockBluetoothModule : Module() {
             System.currentTimeMillis()
         )
 
-        // Iba reálne pripojenie CITROEN
-        // nastaví auto na UNLOCKED
+        // Iba reálny CITROEN connect
+        // nastaví auto na UNLOCKED.
         if (connected) {
             editor.putBoolean(
                 "locked",
@@ -410,11 +478,6 @@ class CarlockBluetoothModule : Module() {
 
             connected
         } catch (e: SecurityException) {
-            Log.d(
-                "CarLockBT",
-                "Bluetooth SecurityException=${e.message}"
-            )
-
             false
         }
     }

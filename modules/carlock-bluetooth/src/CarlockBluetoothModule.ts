@@ -9,6 +9,8 @@ export type CarConnectionChangedEvent = {
 export type CarlockState = {
   connected: boolean;
   locked: boolean;
+  lastEvent: string | null;
+  lastEventAt: number;
 };
 
 type CarlockBluetoothEvents = {
@@ -19,6 +21,10 @@ type CarlockBluetoothEvents = {
 
 declare class CarlockBluetoothModule extends NativeModule<CarlockBluetoothEvents> {
   isCarConnected(): Promise<boolean>;
+
+  isBluetoothEnabled(): Promise<boolean>;
+
+  requestEnableBluetooth(): Promise<boolean>;
 
   getStoredState(): Promise<CarlockState>;
 
