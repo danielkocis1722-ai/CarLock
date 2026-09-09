@@ -10,6 +10,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.os.bundleOf
@@ -264,12 +266,21 @@ class CarlockBluetoothModule : Module() {
                 )
                 .apply()
 
+            //
+            // Ak sme práve potvrdili LOCKED,
+            // zrušíme čakajúci reminder.
+            //
+            if (locked) {
+                cancelLockReminder(
+                    context
+                )
+            }
+
             Log.d(
                 "CarLockBT",
                 "Manual locked state=$locked"
             )
         }
-
         AsyncFunction("isCarConnected") {
             return@AsyncFunction isCitroenConnected()
         }
@@ -447,6 +458,39 @@ class CarlockBluetoothModule : Module() {
         } catch (_: SecurityException) {
             null
         }
+    }
+
+    private fun cancelLockReminder(
+        context: Context
+    ) {
+        val alarmManager =
+            context.getSystemService(
+                Context.ALARM_SERVICE
+            ) as AlarmManager
+
+        val intent =
+            Intent(
+                context,
+                CarlockReminderReceiver::class.java
+            )
+
+        val pendingIntent =
+            PendingIntent.getBroadcast(
+                context,
+                2001,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or
+                        PendingIntent.FLAG_IMMUTABLE
+            )
+
+        alarmManager.cancel(
+            pendingIntent
+        )
+
+        Log.d(
+            "CarLockBT",
+            "Lock reminder cancelled after LOCKED confirmation"
+        )
     }
 
     private fun isCitroenConnected(): Boolean {

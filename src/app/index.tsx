@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import {
   AppState,
+  Linking,
   PermissionsAndroid,
   Platform,
   Pressable,
@@ -26,6 +27,8 @@ export default function HomeScreen() {
 
   const [bluetoothEnabled, setBluetoothEnabled] = useState(true);
 
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+
   const [error, setError] = useState("");
 
   //
@@ -37,8 +40,166 @@ export default function HomeScreen() {
       ? "IN_CAR"
       : "UNCONFIRMED";
 
+  //
+  // BLUETOOTH PERMISSIONS
+  //
+  const requestBluetoothPermissions = async () => {
+    if (Platform.OS !== "android") {
+      return true;
+    }
+
+    if (Platform.Version >= 31) {
+      const result = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+      ]);
+
+      return (
+        result["android.permission.BLUETOOTH_CONNECT"] ===
+          PermissionsAndroid.RESULTS.GRANTED &&
+        result["android.permission.BLUETOOTH_SCAN"] ===
+          PermissionsAndroid.RESULTS.GRANTED
+      );
+    }
+
+    return true;
+  };
+
+  //
+  // NÁJDI SPÁROVANÝ CITROEN
+  //
+  const setupCar = async () => {
+    try {
+      const granted = await requestBluetoothPermissions();
+
+      if (!granted) {
+        setError("Bluetooth permission denied.");
+
+        return;
+      }
+
+      const devices = await RNBluetoothClassic.getBondedDevices();
+
+      const citroen = devices.find(
+        (device: any) => device.name?.trim().toUpperCase() === "CITROEN",
+      );
+
+      if (!citroen) {
+        setError("CITROEN was not found in paired devices.");
+
+        return;
+      }
+
+      setCarDevice(citroen);
+      setError("");
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    }
+  };
+
+  //
+  // SKONTROLUJ NOTIFICATION PERMISSION
+  //
+  const checkNotificationPermission = async () => {
+    if (Platform.OS !== "android") {
+      setNotificationsEnabled(true);
+
+      return;
+    }
+
+    //
+    // Runtime POST_NOTIFICATIONS
+    // existuje od Android 13.
+    //
+    if (Platform.Version < 33) {
+      setNotificationsEnabled(true);
+
+      return;
+    }
+
+    const granted = await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+    );
+
+    setNotificationsEnabled(granted);
+  };
+
+  //
+  // VYŽIADAJ NOTIFICATION PERMISSION
+  //
+  const requestNotificationPermission = async () => {
+    if (Platform.OS !== "android") {
+      setNotificationsEnabled(true);
+
+      return;
+    }
+
+    if (Platform.Version < 33) {
+      setNotificationsEnabled(true);
+
+      return;
+    }
+
+    try {
+      const result = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+      );
+
+      const granted = result === PermissionsAndroid.RESULTS.GRANTED;
+
+      setNotificationsEnabled(granted);
+
+      //
+      // Ak Android už ďalší popup
+      // nepovolí, pošleme používateľa
+      // do App Settings.
+      //
+      if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+        await Linking.openSettings();
+      }
+    } catch (err: any) {
+      console.log("Notification permission error:", err);
+    }
+  };
+
+  //
+  // ANDROID SYSTÉMOVÝ BLUETOOTH DIALÓG
+  //
+  const turnOnBluetooth = async () => {
+    try {
+      const opened = await CarlockBluetoothModule.requestEnableBluetooth();
+
+      if (!opened) {
+        setError("Could not open Bluetooth settings.");
+      }
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    }
+  };
+
+  //
+  // ZATIAĽ MANUÁLNE POTVRDENIE LOCKED.
+  // NESKÔR TO BUDE ROBIŤ NFC.
+  //
+  const confirmLocked = async () => {
+    setIsLocked(true);
+
+    await CarlockBluetoothModule.setLocked(true);
+  };
+
+  //
+  // HLAVNÝ EFFECT
+  //
   useEffect(() => {
     setupCar();
+
+    //
+    // Pri štarte permission iba
+    // kontrolujeme.
+    // Popup nepúšťame automaticky.
+    //
+    checkNotificationPermission();
 
     const loadInitialState = async () => {
       try {
@@ -68,6 +229,10 @@ export default function HomeScreen() {
 
         setIsConnected(event.connected);
 
+        //
+        // Reálne CITROEN pripojenie
+        // znamená, že auto používame.
+        //
         if (event.connected) {
           setIsLocked(false);
         }
@@ -87,21 +252,21 @@ export default function HomeScreen() {
         if (!event.enabled) {
           //
           // Bluetooth OFF =
-          // auto nemôže byť connected.
+          // auto nemôže byť práve
+          // connected.
           //
           setIsConnected(false);
 
           //
-          // isLocked nemeníme.
+          // LOCKED / UNLOCKED
+          // nemeníme.
           //
           return;
         }
 
         //
-        // Bluetooth bol práve zapnutý.
-        // Načítame uložený stav,
-        // ale samotné ON nikdy
-        // neznamená UNLOCKED.
+        // Bluetooth ON samo osebe
+        // nesmie znamenať UNLOCKED.
         //
         const stored = await CarlockBluetoothModule.getStoredState();
 
@@ -120,6 +285,13 @@ export default function HomeScreen() {
         if (nextState !== "active") {
           return;
         }
+
+        //
+        // Napríklad používateľ
+        // práve povolil notifications
+        // v Android Settings.
+        //
+        await checkNotificationPermission();
 
         const stored = await CarlockBluetoothModule.getStoredState();
 
@@ -140,82 +312,9 @@ export default function HomeScreen() {
     };
   }, []);
 
-  const requestBluetoothPermissions = async () => {
-    if (Platform.OS !== "android") {
-      return true;
-    }
-
-    if (Platform.Version >= 31) {
-      const result = await PermissionsAndroid.requestMultiple([
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-      ]);
-
-      return (
-        result["android.permission.BLUETOOTH_CONNECT"] ===
-          PermissionsAndroid.RESULTS.GRANTED &&
-        result["android.permission.BLUETOOTH_SCAN"] ===
-          PermissionsAndroid.RESULTS.GRANTED
-      );
-    }
-
-    return true;
-  };
-
-  const setupCar = async () => {
-    try {
-      const granted = await requestBluetoothPermissions();
-
-      if (!granted) {
-        setError("Bluetooth permission denied.");
-
-        return;
-      }
-
-      const devices = await RNBluetoothClassic.getBondedDevices();
-
-      const citroen = devices.find(
-        (device: any) => device.name?.trim().toUpperCase() === "CITROEN",
-      );
-
-      if (!citroen) {
-        setError("CITROEN was not found in paired devices.");
-
-        return;
-      }
-
-      setCarDevice(citroen);
-    } catch (err: any) {
-      setError(err?.message || String(err));
-    }
-  };
-
   //
-  // Android systémový Bluetooth dialog
+  // VZHĽAD PRE JEDNOTLIVÉ STAVY
   //
-  const turnOnBluetooth = async () => {
-    try {
-      const opened = await CarlockBluetoothModule.requestEnableBluetooth();
-
-      if (!opened) {
-        setError("Could not open Bluetooth settings.");
-      }
-    } catch (err: any) {
-      setError(err?.message || String(err));
-    }
-  };
-
-  //
-  // Zatiaľ manuálne.
-  // Neskôr to spraví NFC.
-  //
-  const confirmLocked = async () => {
-    setIsLocked(true);
-
-    await CarlockBluetoothModule.setLocked(true);
-  };
-
   const stateConfig = {
     LOCKED: {
       title: "LOCKED",
@@ -343,6 +442,8 @@ export default function HomeScreen() {
           </Text>
         </View>
 
+        {/* BLUETOOTH WARNING */}
+
         {!bluetoothEnabled && (
           <View style={styles.bluetoothCard}>
             <View style={styles.bluetoothTop}>
@@ -350,11 +451,7 @@ export default function HomeScreen() {
                 <Ionicons name="bluetooth" size={25} color="#FF5C1D" />
               </View>
 
-              <View
-                style={{
-                  flex: 1,
-                }}
-              >
+              <View style={{ flex: 1 }}>
                 <Text style={styles.bluetoothTitle}>Bluetooth is off</Text>
 
                 <Text style={styles.bluetoothText}>
@@ -379,15 +476,60 @@ export default function HomeScreen() {
           </View>
         )}
 
+        {/* NOTIFICATION WARNING */}
+
+        {!notificationsEnabled && (
+          <View style={styles.notificationCard}>
+            <View style={styles.notificationTop}>
+              <View style={styles.notificationIcon}>
+                <Ionicons
+                  name="notifications-off-outline"
+                  size={25}
+                  color="#FF5C1D"
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.notificationTitle}>
+                  Notifications are off
+                </Text>
+
+                <Text style={styles.notificationText}>
+                  Enable notifications so CarLock can remind you when locking
+                  has not been confirmed.
+                </Text>
+              </View>
+            </View>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.notificationButton,
+                pressed && {
+                  opacity: 0.8,
+                },
+              ]}
+              onPress={requestNotificationPermission}
+            >
+              <Ionicons
+                name="notifications-outline"
+                size={20}
+                color="#FFFFFF"
+              />
+
+              <Text style={styles.notificationButtonText}>
+                Enable notifications
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* UNCONFIRMED WARNING */}
+
         {carState === "UNCONFIRMED" && (
           <View style={styles.warning}>
             <Ionicons name="alert-circle-outline" size={24} color="#FF5C1D" />
 
-            <View
-              style={{
-                flex: 1,
-              }}
-            >
+            <View style={{ flex: 1 }}>
               <Text style={styles.warningTitle}>Locking not confirmed</Text>
 
               <Text style={styles.warningText}>
@@ -613,6 +755,62 @@ const styles = StyleSheet.create({
   },
 
   bluetoothButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 15,
+  },
+
+  notificationCard: {
+    width: "100%",
+    backgroundColor: "rgba(255,92,29,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,92,29,0.35)",
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 15,
+  },
+
+  notificationTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 15,
+  },
+
+  notificationIcon: {
+    width: 45,
+    height: 45,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,92,29,0.12)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 13,
+  },
+
+  notificationTitle: {
+    color: "#EAF4FF",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+
+  notificationText: {
+    color: "#9FB7D9",
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 3,
+  },
+
+  notificationButton: {
+    width: "100%",
+    backgroundColor: "#FF5C1D",
+    borderRadius: 14,
+    paddingVertical: 14,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+  },
+
+  notificationButtonText: {
     color: "#FFFFFF",
     fontWeight: "800",
     fontSize: 15,
