@@ -333,6 +333,6 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
             2001
 
         private const val REMINDER_DELAY_MS =
-            30_000L
+            15_000L
     }
 }

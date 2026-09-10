@@ -16,30 +16,44 @@ class CarlockReminderReceiver : BroadcastReceiver() {
         context: Context,
         intent: Intent
     ) {
-        val prefs = context.getSharedPreferences(
-            "carlock_state",
-            Context.MODE_PRIVATE
-        )
+        val prefs =
+            context.getSharedPreferences(
+                "carlock_state",
+                Context.MODE_PRIVATE
+            )
 
-        val connected = prefs.getBoolean(
-            "connected",
-            false
-        )
+        val connected =
+            prefs.getBoolean(
+                "connected",
+                false
+            )
 
-        val locked = prefs.getBoolean(
-            "locked",
-            true
-        )
+        val locked =
+            prefs.getBoolean(
+                "locked",
+                true
+            )
 
-        // Notification pošleme iba ak:
-        // - auto už nie je pripojené
-        // - zamknutie stále nebolo potvrdené
-        if (connected || locked) {
+        //
+        // Notification iba ak:
+        // - CITROEN nie je connected
+        // - locking stále nie je confirmed
+        //
+        if (
+            connected ||
+            locked
+        ) {
             return
         }
 
-        createNotificationChannel(context)
+        createNotificationChannel(
+            context
+        )
 
+        //
+        // Klik na samotnú notification
+        // otvorí CarLock appku.
+        //
         val launchIntent =
             context.packageManager
                 .getLaunchIntentForPackage(
@@ -47,7 +61,9 @@ class CarlockReminderReceiver : BroadcastReceiver() {
                 )
 
         val contentIntent =
-            if (launchIntent != null) {
+            if (
+                launchIntent != null
+            ) {
                 PendingIntent.getActivity(
                     context,
                     0,
@@ -58,6 +74,50 @@ class CarlockReminderReceiver : BroadcastReceiver() {
             } else {
                 null
             }
+
+        //
+        // ACTION 1:
+        // I locked it
+        //
+        val lockedIntent =
+            Intent(
+                context,
+                CarlockNotificationActionReceiver::class.java
+            ).apply {
+                action =
+                    CarlockNotificationActionReceiver.ACTION_LOCKED
+            }
+
+        val lockedPendingIntent =
+            PendingIntent.getBroadcast(
+                context,
+                LOCKED_REQUEST_CODE,
+                lockedIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or
+                        PendingIntent.FLAG_IMMUTABLE
+            )
+
+        //
+        // ACTION 2:
+        // Keep unlocked
+        //
+        val keepUnlockedIntent =
+            Intent(
+                context,
+                CarlockNotificationActionReceiver::class.java
+            ).apply {
+                action =
+                    CarlockNotificationActionReceiver.ACTION_KEEP_UNLOCKED
+            }
+
+        val keepUnlockedPendingIntent =
+            PendingIntent.getBroadcast(
+                context,
+                KEEP_UNLOCKED_REQUEST_CODE,
+                keepUnlockedIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or
+                        PendingIntent.FLAG_IMMUTABLE
+            )
 
         val notification =
             NotificationCompat.Builder(
@@ -71,14 +131,35 @@ class CarlockReminderReceiver : BroadcastReceiver() {
                     "Did you lock your car?"
                 )
                 .setContentText(
-                    "CITROEN disconnected 30 seconds ago and locking has not been confirmed."
+                    "CITROEN disconnected and locking has not been confirmed."
                 )
                 .setPriority(
                     NotificationCompat.PRIORITY_HIGH
                 )
                 .setAutoCancel(true)
+
+                //
+                // BUTTON 1
+                //
+                .addAction(
+                    android.R.drawable.ic_lock_lock,
+                    "I locked it",
+                    lockedPendingIntent
+                )
+
+                //
+                // BUTTON 2
+                //
+                .addAction(
+                    android.R.drawable.ic_menu_revert,
+                    "Keep unlocked",
+                    keepUnlockedPendingIntent
+                )
+
                 .apply {
-                    if (contentIntent != null) {
+                    if (
+                        contentIntent != null
+                    ) {
                         setContentIntent(
                             contentIntent
                         )
@@ -94,7 +175,10 @@ class CarlockReminderReceiver : BroadcastReceiver() {
                     notification
                 )
         } catch (_: SecurityException) {
-            // Notification permission nebola udelená.
+            //
+            // Notification permission
+            // nie je povolená.
+            //
         }
     }
 
@@ -108,14 +192,15 @@ class CarlockReminderReceiver : BroadcastReceiver() {
             return
         }
 
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "Car lock reminders",
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description =
-                "Reminders when locking has not been confirmed."
-        }
+        val channel =
+            NotificationChannel(
+                CHANNEL_ID,
+                "Car lock reminders",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description =
+                    "Reminders when locking has not been confirmed."
+            }
 
         val manager =
             context.getSystemService(
@@ -133,5 +218,11 @@ class CarlockReminderReceiver : BroadcastReceiver() {
 
         const val NOTIFICATION_ID =
             1001
+
+        private const val LOCKED_REQUEST_CODE =
+            3001
+
+        private const val KEEP_UNLOCKED_REQUEST_CODE =
+            3002
     }
 }
