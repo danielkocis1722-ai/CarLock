@@ -13,6 +13,11 @@ export type CarlockState = {
   lastEventAt: number;
 };
 
+export type SelectedCar = {
+  name: string | null;
+  address: string | null;
+};
+
 type CarlockBluetoothEvents = {
   onCarConnectionChanged: (event: CarConnectionChangedEvent) => void;
 
@@ -29,6 +34,10 @@ declare class CarlockBluetoothModule extends NativeModule<CarlockBluetoothEvents
   getStoredState(): Promise<CarlockState>;
 
   setLocked(locked: boolean): Promise<void>;
+
+  getSelectedCar(): Promise<SelectedCar>;
+
+  setSelectedCar(name: string, address: string): Promise<void>;
 }
 
 export default requireNativeModule<CarlockBluetoothModule>("CarlockBluetooth");

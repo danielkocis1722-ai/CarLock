@@ -34,6 +34,12 @@ class CarlockReminderReceiver : BroadcastReceiver() {
                 true
             )
 
+        val selectedCarName =
+            prefs.getString(
+                "selectedCarName",
+                "Your car"
+            ) ?: "Your car"
+
         //
         // Notification iba ak:
         // - CITROEN nie je connected
@@ -131,7 +137,7 @@ class CarlockReminderReceiver : BroadcastReceiver() {
                     "Did you lock your car?"
                 )
                 .setContentText(
-                    "CITROEN disconnected and locking has not been confirmed."
+                    "$selectedCarName disconnected and locking has not been confirmed."
                 )
                 .setPriority(
                     NotificationCompat.PRIORITY_HIGH

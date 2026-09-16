@@ -1,5 +1,7 @@
 package expo.modules.carlockbluetooth
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothDevice
@@ -10,8 +12,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
-import android.app.AlarmManager
-import android.app.PendingIntent
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.os.bundleOf
@@ -22,82 +22,139 @@ class CarlockBluetoothModule : Module() {
 
     private var receiverRegistered = false
 
-    private val bluetoothReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent == null) return
+    private val bluetoothReceiver =
+        object : BroadcastReceiver() {
 
-            // Bluetooth telefónu ON / OFF
-            if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
-                val state: Int = intent.getIntExtra(
-                    BluetoothAdapter.EXTRA_STATE,
-                    BluetoothAdapter.ERROR
-                )
+            override fun onReceive(
+                context: Context?,
+                intent: Intent?
+            ) {
+                if (intent == null) return
 
-                val enabled =
-                    state == BluetoothAdapter.STATE_ON
+                //
+                // BLUETOOTH ADAPTER ON / OFF
+                //
+                if (
+                    intent.action ==
+                    BluetoothAdapter.ACTION_STATE_CHANGED
+                ) {
+                    val state =
+                        intent.getIntExtra(
+                            BluetoothAdapter.EXTRA_STATE,
+                            BluetoothAdapter.ERROR
+                        )
+
+                    val enabled =
+                        state ==
+                                BluetoothAdapter.STATE_ON
+
+                    sendEvent(
+                        "onBluetoothStateChanged",
+                        bundleOf(
+                            "enabled" to enabled
+                        )
+                    )
+
+                    return
+                }
+
+                val device =
+                    getBluetoothDevice(
+                        intent
+                    )
+
+                val name =
+                    getDeviceName(
+                        device
+                    )
 
                 Log.d(
                     "CarLockBT",
-                    "Bluetooth adapter state=$state enabled=$enabled"
+                    "LIVE event=${intent.action}, device=$name, address=${device?.address}"
                 )
 
-                sendEvent(
-                    "onBluetoothStateChanged",
-                    bundleOf(
-                        "enabled" to enabled
+                //
+                // NOVÉ:
+                // kontrolujeme aktuálne
+                // vybrané auto
+                //
+                if (
+                    !isSelectedCar(
+                        device,
+                        name
                     )
-                )
+                ) {
+                    return
+                }
 
-                return
-            }
+                when (intent.action) {
 
-            val device: BluetoothDevice? =
-                getBluetoothDevice(intent)
+                    BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
+                    BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED -> {
 
-            val name: String? =
-                getDeviceName(device)
+                        val state =
+                            intent.getIntExtra(
+                                BluetoothProfile.EXTRA_STATE,
+                                BluetoothProfile.STATE_DISCONNECTED
+                            )
 
-            Log.d(
-                "CarLockBT",
-                "LIVE event=${intent.action}, device=$name"
-            )
+                        if (
+                            state ==
+                            BluetoothProfile.STATE_CONNECTED
+                        ) {
+                            saveConnectionState(
+                                true
+                            )
 
-            // Ignorujeme všetko okrem CITROEN
-            if (name?.trim()?.uppercase() != "CITROEN") {
-                return
-            }
+                            sendCarEvent(
+                                true,
+                                device,
+                                name
+                            )
+                        } else if (
+                            state ==
+                            BluetoothProfile.STATE_DISCONNECTED
+                        ) {
+                            saveConnectionState(
+                                false
+                            )
 
-            when (intent.action) {
+                            sendCarEvent(
+                                false,
+                                device,
+                                name
+                            )
+                        }
+                    }
 
-                BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
-                BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED -> {
+                    BluetoothDevice.ACTION_ACL_CONNECTED -> {
 
-                    val state: Int = intent.getIntExtra(
-                        BluetoothProfile.EXTRA_STATE,
-                        BluetoothProfile.STATE_DISCONNECTED
-                    )
+                        Log.d(
+                            "CarLockBT",
+                            "LIVE SELECTED CAR CONNECTED"
+                        )
 
-                    Log.d(
-                        "CarLockBT",
-                        "LIVE profile state=$state"
-                    )
-
-                    if (
-                        state ==
-                        BluetoothProfile.STATE_CONNECTED
-                    ) {
-                        saveConnectionState(true)
+                        saveConnectionState(
+                            true
+                        )
 
                         sendCarEvent(
                             true,
                             device,
                             name
                         )
-                    } else if (
-                        state ==
-                        BluetoothProfile.STATE_DISCONNECTED
-                    ) {
-                        saveConnectionState(false)
+                    }
+
+                    BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+
+                        Log.d(
+                            "CarLockBT",
+                            "LIVE SELECTED CAR DISCONNECTED"
+                        )
+
+                        saveConnectionState(
+                            false
+                        )
 
                         sendCarEvent(
                             false,
@@ -106,209 +163,374 @@ class CarlockBluetoothModule : Module() {
                         )
                     }
                 }
-
-                BluetoothDevice.ACTION_ACL_CONNECTED -> {
-                    Log.d(
-                        "CarLockBT",
-                        "LIVE CITROEN CONNECTED"
-                    )
-
-                    saveConnectionState(true)
-
-                    sendCarEvent(
-                        true,
-                        device,
-                        name
-                    )
-                }
-
-                BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-                    Log.d(
-                        "CarLockBT",
-                        "LIVE CITROEN DISCONNECTED"
-                    )
-
-                    saveConnectionState(false)
-
-                    sendCarEvent(
-                        false,
-                        device,
-                        name
-                    )
-                }
-            }
-        }
-    }
-
-    override fun definition() = ModuleDefinition {
-        Name("CarlockBluetooth")
-
-        Events(
-            "onCarConnectionChanged",
-            "onBluetoothStateChanged"
-        )
-
-        //
-        // Je Bluetooth telefónu momentálne zapnutý?
-        //
-        AsyncFunction("isBluetoothEnabled") {
-            val adapter =
-                BluetoothAdapter.getDefaultAdapter()
-
-            if (adapter == null) {
-                return@AsyncFunction false
-            }
-
-            return@AsyncFunction try {
-                adapter.isEnabled
-            } catch (_: SecurityException) {
-                false
             }
         }
 
-        //
-        // Otvor Android systémový dialóg
-        // na zapnutie Bluetooth.
-        //
-        AsyncFunction("requestEnableBluetooth") {
-            val activity =
-                appContext.currentActivity
-                    ?: return@AsyncFunction false
+    override fun definition() =
+        ModuleDefinition {
 
-            val adapter =
-                BluetoothAdapter.getDefaultAdapter()
-                    ?: return@AsyncFunction false
-
-            try {
-                if (adapter.isEnabled) {
-                    return@AsyncFunction true
-                }
-
-                val enableIntent =
-                    Intent(
-                        BluetoothAdapter.ACTION_REQUEST_ENABLE
-                    )
-
-                activity.startActivity(
-                    enableIntent
-                )
-
-                Log.d(
-                    "CarLockBT",
-                    "Requested Bluetooth enable dialog"
-                )
-
-                return@AsyncFunction true
-            } catch (e: SecurityException) {
-                Log.d(
-                    "CarLockBT",
-                    "Bluetooth enable request failed=${e.message}"
-                )
-
-                return@AsyncFunction false
-            }
-        }
-
-        AsyncFunction("getStoredState") {
-            val context =
-                appContext.reactContext
-
-            if (context == null) {
-                return@AsyncFunction mapOf<String, Any?>(
-                    "connected" to false,
-                    "locked" to true,
-                    "lastEvent" to "NONE",
-                    "lastEventAt" to 0L
-                )
-            }
-
-            val prefs =
-                context.getSharedPreferences(
-                    "carlock_state",
-                    Context.MODE_PRIVATE
-                )
-
-            return@AsyncFunction mapOf<String, Any?>(
-                "connected" to prefs.getBoolean(
-                    "connected",
-                    false
-                ),
-                "locked" to prefs.getBoolean(
-                    "locked",
-                    true
-                ),
-                "lastEvent" to prefs.getString(
-                    "lastEvent",
-                    "NONE"
-                ),
-                "lastEventAt" to prefs.getLong(
-                    "lastEventAt",
-                    0L
-                )
+            Name(
+                "CarlockBluetooth"
             )
-        }
 
-        AsyncFunction("setLocked") { locked: Boolean ->
-
-            val context =
-                appContext.reactContext
-                    ?: return@AsyncFunction
-
-            context
-                .getSharedPreferences(
-                    "carlock_state",
-                    Context.MODE_PRIVATE
-                )
-                .edit()
-                .putBoolean(
-                    "locked",
-                    locked
-                )
-                .apply()
+            Events(
+                "onCarConnectionChanged",
+                "onBluetoothStateChanged"
+            )
 
             //
-            // Ak sme práve potvrdili LOCKED,
-            // zrušíme čakajúci reminder.
+            // GET SELECTED CAR
             //
-            if (locked) {
+            AsyncFunction(
+                "getSelectedCar"
+            ) {
+                val context =
+                    appContext.reactContext
+
+                if (
+                    context == null
+                ) {
+                    return@AsyncFunction mapOf<String, Any?>(
+                        "name" to null,
+                        "address" to null
+                    )
+                }
+
+                val prefs =
+                    context.getSharedPreferences(
+                        "carlock_state",
+                        Context.MODE_PRIVATE
+                    )
+
+                return@AsyncFunction mapOf<String, Any?>(
+                    "name" to
+                            prefs.getString(
+                                "selectedCarName",
+                                null
+                            ),
+
+                    "address" to
+                            prefs.getString(
+                                "selectedCarAddress",
+                                null
+                            )
+                )
+            }
+
+            //
+            // SET SELECTED CAR
+            //
+            AsyncFunction(
+                "setSelectedCar"
+            ) { name: String,
+                address: String ->
+
+                val context =
+                    appContext.reactContext
+                        ?: return@AsyncFunction
+
+                context
+                    .getSharedPreferences(
+                        "carlock_state",
+                        Context.MODE_PRIVATE
+                    )
+                    .edit()
+                    .putString(
+                        "selectedCarName",
+                        name
+                    )
+                    .putString(
+                        "selectedCarAddress",
+                        address
+                    )
+
+                    //
+                    // Pri zmene auta
+                    // začíname v bezpečnom
+                    // neutrálnom stave.
+                    //
+                    .putBoolean(
+                        "connected",
+                        false
+                    )
+                    .putBoolean(
+                        "locked",
+                        true
+                    )
+                    .putString(
+                        "lastEvent",
+                        "NONE"
+                    )
+                    .putLong(
+                        "lastEventAt",
+                        0L
+                    )
+                    .apply()
+
                 cancelLockReminder(
                     context
                 )
+
+                Log.d(
+                    "CarLockBT",
+                    "Selected car changed: $name / $address"
+                )
             }
 
-            Log.d(
-                "CarLockBT",
-                "Manual locked state=$locked"
+            //
+            // BLUETOOTH ON?
+            //
+            AsyncFunction(
+                "isBluetoothEnabled"
+            ) {
+                val adapter =
+                    BluetoothAdapter
+                        .getDefaultAdapter()
+
+                if (
+                    adapter == null
+                ) {
+                    return@AsyncFunction false
+                }
+
+                return@AsyncFunction try {
+                    adapter.isEnabled
+                } catch (
+                    _: SecurityException
+                ) {
+                    false
+                }
+            }
+
+            //
+            // ANDROID BLUETOOTH DIALOG
+            //
+            AsyncFunction(
+                "requestEnableBluetooth"
+            ) {
+                val activity =
+                    appContext.currentActivity
+                        ?: return@AsyncFunction false
+
+                val adapter =
+                    BluetoothAdapter
+                        .getDefaultAdapter()
+                        ?: return@AsyncFunction false
+
+                try {
+                    if (
+                        adapter.isEnabled
+                    ) {
+                        return@AsyncFunction true
+                    }
+
+                    val enableIntent =
+                        Intent(
+                            BluetoothAdapter.ACTION_REQUEST_ENABLE
+                        )
+
+                    activity.startActivity(
+                        enableIntent
+                    )
+
+                    return@AsyncFunction true
+
+                } catch (
+                    e: SecurityException
+                ) {
+                    Log.d(
+                        "CarLockBT",
+                        "Bluetooth enable error=${e.message}"
+                    )
+
+                    return@AsyncFunction false
+                }
+            }
+
+            //
+            // STORED STATE
+            //
+            AsyncFunction(
+                "getStoredState"
+            ) {
+                val context =
+                    appContext.reactContext
+
+                if (
+                    context == null
+                ) {
+                    return@AsyncFunction mapOf<String, Any?>(
+                        "connected" to false,
+                        "locked" to true,
+                        "lastEvent" to "NONE",
+                        "lastEventAt" to 0L
+                    )
+                }
+
+                val prefs =
+                    context.getSharedPreferences(
+                        "carlock_state",
+                        Context.MODE_PRIVATE
+                    )
+
+                return@AsyncFunction mapOf<String, Any?>(
+                    "connected" to
+                            prefs.getBoolean(
+                                "connected",
+                                false
+                            ),
+
+                    "locked" to
+                            prefs.getBoolean(
+                                "locked",
+                                true
+                            ),
+
+                    "lastEvent" to
+                            prefs.getString(
+                                "lastEvent",
+                                "NONE"
+                            ),
+
+                    "lastEventAt" to
+                            prefs.getLong(
+                                "lastEventAt",
+                                0L
+                            )
+                )
+            }
+
+            //
+            // MANUAL LOCK / NFC LATER
+            //
+            AsyncFunction(
+                "setLocked"
+            ) { locked: Boolean ->
+
+                val context =
+                    appContext.reactContext
+                        ?: return@AsyncFunction
+
+                context
+                    .getSharedPreferences(
+                        "carlock_state",
+                        Context.MODE_PRIVATE
+                    )
+                    .edit()
+                    .putBoolean(
+                        "locked",
+                        locked
+                    )
+                    .apply()
+
+                if (
+                    locked
+                ) {
+                    cancelLockReminder(
+                        context
+                    )
+                }
+
+                Log.d(
+                    "CarLockBT",
+                    "Manual locked state=$locked"
+                )
+            }
+
+            AsyncFunction(
+                "isCarConnected"
+            ) {
+                return@AsyncFunction isSelectedCarConnected()
+            }
+
+            OnStartObserving(
+                "onCarConnectionChanged"
+            ) {
+                registerReceiver()
+            }
+
+            OnStopObserving(
+                "onCarConnectionChanged"
+            ) {
+                unregisterReceiver()
+            }
+
+            OnDestroy {
+                unregisterReceiver()
+            }
+        }
+
+    //
+    // JE TOTO VYBRANÉ AUTO?
+    //
+    private fun isSelectedCar(
+        device: BluetoothDevice?,
+        deviceName: String?
+    ): Boolean {
+
+        val context =
+            appContext.reactContext
+                ?: return false
+
+        val prefs =
+            context.getSharedPreferences(
+                "carlock_state",
+                Context.MODE_PRIVATE
             )
-        }
-        AsyncFunction("isCarConnected") {
-            return@AsyncFunction isCitroenConnected()
-        }
 
-        OnStartObserving(
-            "onCarConnectionChanged"
+        val selectedAddress =
+            prefs.getString(
+                "selectedCarAddress",
+                null
+            )
+
+        val selectedName =
+            prefs.getString(
+                "selectedCarName",
+                null
+            )
+
+        //
+        // Ak máme MAC adresu,
+        // tá má prioritu.
+        //
+        if (
+            !selectedAddress.isNullOrBlank()
         ) {
-            registerReceiver()
+            return device
+                ?.address
+                ?.equals(
+                    selectedAddress,
+                    ignoreCase = true
+                ) == true
         }
 
-        OnStopObserving(
-            "onCarConnectionChanged"
-        ) {
-            unregisterReceiver()
-        }
+        //
+        // Fallback pre existujúcu
+        // inštaláciu pred Settings.
+        //
+        val nameToMatch =
+            selectedName
+                ?: "CITROEN"
 
-        OnDestroy {
-            unregisterReceiver()
-        }
+        return deviceName
+            ?.trim()
+            ?.equals(
+                nameToMatch.trim(),
+                ignoreCase = true
+            ) == true
     }
 
     private fun registerReceiver() {
-        if (receiverRegistered) {
+        if (
+            receiverRegistered
+        ) {
             return
         }
 
         val context =
-            appContext.reactContext ?: return
+            appContext.reactContext
+                ?: return
 
         val filter =
             IntentFilter().apply {
@@ -341,34 +563,32 @@ class CarlockBluetoothModule : Module() {
             ContextCompat.RECEIVER_EXPORTED
         )
 
-        receiverRegistered = true
-
-        Log.d(
-            "CarLockBT",
-            "LIVE receiver registered"
-        )
+        receiverRegistered =
+            true
     }
 
     private fun unregisterReceiver() {
-        if (!receiverRegistered) {
+        if (
+            !receiverRegistered
+        ) {
             return
         }
 
         val context =
-            appContext.reactContext ?: return
+            appContext.reactContext
+                ?: return
 
         try {
             context.unregisterReceiver(
                 bluetoothReceiver
             )
-        } catch (e: Exception) {
-            Log.d(
-                "CarLockBT",
-                "Receiver unregister error=${e.message}"
-            )
+        } catch (
+            _: Exception
+        ) {
         }
 
-        receiverRegistered = false
+        receiverRegistered =
+            false
     }
 
     private fun sendCarEvent(
@@ -381,7 +601,8 @@ class CarlockBluetoothModule : Module() {
             bundleOf(
                 "connected" to connected,
                 "name" to name,
-                "address" to device?.address
+                "address" to
+                        device?.address
             )
         )
     }
@@ -390,7 +611,8 @@ class CarlockBluetoothModule : Module() {
         connected: Boolean
     ) {
         val context =
-            appContext.reactContext ?: return
+            appContext.reactContext
+                ?: return
 
         val editor =
             context
@@ -407,7 +629,9 @@ class CarlockBluetoothModule : Module() {
 
         editor.putString(
             "lastEvent",
-            if (connected) {
+            if (
+                connected
+            ) {
                 "CONNECTED"
             } else {
                 "DISCONNECTED"
@@ -419,9 +643,9 @@ class CarlockBluetoothModule : Module() {
             System.currentTimeMillis()
         )
 
-        // Iba reálny CITROEN connect
-        // nastaví auto na UNLOCKED.
-        if (connected) {
+        if (
+            connected
+        ) {
             editor.putBoolean(
                 "locked",
                 false
@@ -434,6 +658,7 @@ class CarlockBluetoothModule : Module() {
     private fun getBluetoothDevice(
         intent: Intent
     ): BluetoothDevice? {
+
         return if (
             Build.VERSION.SDK_INT >=
             Build.VERSION_CODES.TIRAMISU
@@ -443,7 +668,9 @@ class CarlockBluetoothModule : Module() {
                 BluetoothDevice::class.java
             )
         } else {
-            @Suppress("DEPRECATION")
+            @Suppress(
+                "DEPRECATION"
+            )
             intent.getParcelableExtra(
                 BluetoothDevice.EXTRA_DEVICE
             )
@@ -453,9 +680,12 @@ class CarlockBluetoothModule : Module() {
     private fun getDeviceName(
         device: BluetoothDevice?
     ): String? {
+
         return try {
             device?.name
-        } catch (_: SecurityException) {
+        } catch (
+            _: SecurityException
+        ) {
             null
         }
     }
@@ -486,42 +716,41 @@ class CarlockBluetoothModule : Module() {
         alarmManager.cancel(
             pendingIntent
         )
-
-        Log.d(
-            "CarLockBT",
-            "Lock reminder cancelled after LOCKED confirmation"
-        )
     }
 
-    private fun isCitroenConnected(): Boolean {
+    private fun isSelectedCarConnected(): Boolean {
+
+        //
+        // Zatiaľ túto funkciu
+        // nepoužívame ako source of truth.
+        // Stored events ostávajú hlavné.
+        //
         val adapter =
-            BluetoothAdapter.getDefaultAdapter()
+            BluetoothAdapter
+                .getDefaultAdapter()
                 ?: return false
 
         return try {
-            val a2dp: Int =
-                adapter.getProfileConnectionState(
-                    BluetoothProfile.A2DP
-                )
+            val a2dp =
+                adapter
+                    .getProfileConnectionState(
+                        BluetoothProfile.A2DP
+                    )
 
-            val headset: Int =
-                adapter.getProfileConnectionState(
-                    BluetoothProfile.HEADSET
-                )
+            val headset =
+                adapter
+                    .getProfileConnectionState(
+                        BluetoothProfile.HEADSET
+                    )
 
-            val connected: Boolean =
-                a2dp ==
-                        BluetoothProfile.STATE_CONNECTED ||
-                        headset ==
-                        BluetoothProfile.STATE_CONNECTED
+            a2dp ==
+                    BluetoothProfile.STATE_CONNECTED ||
+                    headset ==
+                    BluetoothProfile.STATE_CONNECTED
 
-            Log.d(
-                "CarLockBT",
-                "Profile check A2DP=$a2dp HEADSET=$headset connected=$connected"
-            )
-
-            connected
-        } catch (e: SecurityException) {
+        } catch (
+            _: SecurityException
+        ) {
             false
         }
     }

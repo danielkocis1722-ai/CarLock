@@ -13,16 +13,14 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 
-class CarlockBluetoothReceiver : BroadcastReceiver() {
+class CarlockBluetoothReceiver :
+    BroadcastReceiver() {
 
     override fun onReceive(
         context: Context,
         intent: Intent
     ) {
 
-        //
-        // BLUETOOTH ADAPTER ON / OFF
-        //
         if (
             intent.action ==
             BluetoothAdapter.ACTION_STATE_CHANGED
@@ -32,11 +30,6 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
                     BluetoothAdapter.EXTRA_STATE,
                     BluetoothAdapter.ERROR
                 )
-
-            Log.d(
-                "CarLockBT",
-                "BACKGROUND Bluetooth adapter state=$state"
-            )
 
             if (
                 state ==
@@ -53,19 +46,12 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
                         false
                     )
                     .apply()
-
-                Log.d(
-                    "CarLockBT",
-                    "BACKGROUND Bluetooth OFF -> connected=false"
-                )
             }
 
-            // Bluetooth OFF samo o sebe
-            // nespúšťa lock reminder.
             return
         }
 
-        val device: BluetoothDevice? =
+        val device =
             if (
                 Build.VERSION.SDK_INT >=
                 Build.VERSION_CODES.TIRAMISU
@@ -75,7 +61,9 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
                     BluetoothDevice::class.java
                 )
             } else {
-                @Suppress("DEPRECATION")
+                @Suppress(
+                    "DEPRECATION"
+                )
                 intent.getParcelableExtra(
                     BluetoothDevice.EXTRA_DEVICE
                 )
@@ -84,23 +72,27 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
         val name =
             try {
                 device?.name
-            } catch (_: SecurityException) {
+            } catch (
+                _: SecurityException
+            ) {
                 null
             }
 
         Log.d(
             "CarLockBT",
-            "BACKGROUND action=${intent.action}, device=$name"
+            "BACKGROUND event=${intent.action}, device=$name, address=${device?.address}"
         )
 
         //
-        // Ignorujeme JBL, Sony, Buds...
+        // NOVÉ:
+        // filtrujeme selected car
         //
         if (
-            name
-                ?.trim()
-                ?.uppercase() !=
-            "CITROEN"
+            !isSelectedCar(
+                context,
+                device,
+                name
+            )
         ) {
             return
         }
@@ -111,11 +103,10 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
                 Context.MODE_PRIVATE
             )
 
-        when (intent.action) {
+        when (
+            intent.action
+        ) {
 
-            //
-            // CITROEN CONNECTED
-            //
             BluetoothDevice.ACTION_ACL_CONNECTED -> {
 
                 prefs.edit()
@@ -137,23 +128,16 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
                     )
                     .apply()
 
-                //
-                // Ak sa auto znovu pripojilo,
-                // starý reminder už nechceme.
-                //
                 cancelLockReminder(
                     context
                 )
 
                 Log.d(
                     "CarLockBT",
-                    "BACKGROUND CITROEN CONNECTED"
+                    "BACKGROUND SELECTED CAR CONNECTED"
                 )
             }
 
-            //
-            // CITROEN DISCONNECTED
-            //
             BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
 
                 prefs.edit()
@@ -171,17 +155,13 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
                     )
                     .apply()
 
-                //
-                // UNCONFIRMED
-                // → reminder o 30 sekúnd.
-                //
                 scheduleLockReminder(
                     context
                 )
 
                 Log.d(
                     "CarLockBT",
-                    "BACKGROUND CITROEN DISCONNECTED -> reminder scheduled"
+                    "BACKGROUND SELECTED CAR DISCONNECTED -> reminder scheduled"
                 )
             }
 
@@ -193,11 +173,6 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
                         BluetoothProfile.EXTRA_STATE,
                         BluetoothProfile.STATE_DISCONNECTED
                     )
-
-                Log.d(
-                    "CarLockBT",
-                    "BACKGROUND profile state=$state"
-                )
 
                 if (
                     state ==
@@ -246,10 +221,65 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
                         )
                         .apply()
 
-
+                    //
+                    // Reminder tu nedávame.
+                    // Čakáme na ACL disconnect.
+                    //
                 }
             }
         }
+    }
+
+    private fun isSelectedCar(
+        context: Context,
+        device: BluetoothDevice?,
+        deviceName: String?
+    ): Boolean {
+
+        val prefs =
+            context.getSharedPreferences(
+                "carlock_state",
+                Context.MODE_PRIVATE
+            )
+
+        val selectedAddress =
+            prefs.getString(
+                "selectedCarAddress",
+                null
+            )
+
+        val selectedName =
+            prefs.getString(
+                "selectedCarName",
+                null
+            )
+
+        if (
+            !selectedAddress.isNullOrBlank()
+        ) {
+            return device
+                ?.address
+                ?.equals(
+                    selectedAddress,
+                    ignoreCase = true
+                ) == true
+        }
+
+        //
+        // Migration fallback:
+        // kým si nič nevybral,
+        // sleduj CITROEN.
+        //
+        val nameToMatch =
+            selectedName
+                ?: "CITROEN"
+
+        return deviceName
+            ?.trim()
+            ?.equals(
+                nameToMatch.trim(),
+                ignoreCase = true
+            ) == true
     }
 
     private fun scheduleLockReminder(
@@ -279,10 +309,6 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
             System.currentTimeMillis() +
                     REMINDER_DELAY_MS
 
-        //
-        // Nepotrebujeme exact-alarm permission.
-        // Reminder nemusí prísť presne na milisekundu.
-        //
         alarmManager.setAndAllowWhileIdle(
             AlarmManager.RTC_WAKEUP,
             triggerAt,
@@ -291,7 +317,7 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
 
         Log.d(
             "CarLockBT",
-            "Lock reminder scheduled for 30 seconds"
+            "Lock reminder scheduled for 15 seconds"
         )
     }
 
@@ -321,18 +347,16 @@ class CarlockBluetoothReceiver : BroadcastReceiver() {
         alarmManager.cancel(
             pendingIntent
         )
-
-        Log.d(
-            "CarLockBT",
-            "Lock reminder cancelled"
-        )
     }
 
     companion object {
-        private const val REMINDER_REQUEST_CODE =
+
+        private const val
+                REMINDER_REQUEST_CODE =
             2001
 
-        private const val REMINDER_DELAY_MS =
+        private const val
+                REMINDER_DELAY_MS =
             15_000L
     }
 }

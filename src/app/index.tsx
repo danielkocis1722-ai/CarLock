@@ -1,5 +1,6 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useEffect, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   AppState,
@@ -19,6 +20,8 @@ import CarlockBluetoothModule from "../../modules/carlock-bluetooth/src/CarlockB
 type CarState = "LOCKED" | "IN_CAR" | "UNCONFIRMED";
 
 export default function HomeScreen() {
+  const router = useRouter();
+
   const [carDevice, setCarDevice] = useState<any>(null);
 
   const [isConnected, setIsConnected] = useState(false);
@@ -67,7 +70,7 @@ export default function HomeScreen() {
   };
 
   //
-  // NÁJDI SPÁROVANÝ CITROEN
+  // NAČÍTAJ VYBRANÉ AUTO
   //
   const setupCar = async () => {
     try {
@@ -81,17 +84,50 @@ export default function HomeScreen() {
 
       const devices = await RNBluetoothClassic.getBondedDevices();
 
-      const citroen = devices.find(
-        (device: any) => device.name?.trim().toUpperCase() === "CITROEN",
+      let selected = await CarlockBluetoothModule.getSelectedCar();
+
+      //
+      // MIGRÁCIA PRE TVOJ EXISTUJÚCI CARLOCK:
+      // ak ešte nemáme vybrané auto,
+      // automaticky vyberieme CITROEN.
+      //
+      if (!selected.address) {
+        const citroen = devices.find(
+          (device: any) => device.name?.trim().toUpperCase() === "CITROEN",
+        );
+
+        if (citroen) {
+          await CarlockBluetoothModule.setSelectedCar(
+            citroen.name ?? "CITROEN",
+            citroen.address,
+          );
+
+          selected = {
+            name: citroen.name ?? "CITROEN",
+            address: citroen.address,
+          };
+        }
+      }
+
+      //
+      // NÁJDI VYBRANÉ AUTO
+      // POD BLUETOOTH ADRESY.
+      //
+      const car = devices.find(
+        (device: any) =>
+          device.address?.toUpperCase() === selected.address?.toUpperCase(),
       );
 
-      if (!citroen) {
-        setError("CITROEN was not found in paired devices.");
+      if (!car) {
+        setCarDevice(null);
+
+        setError("Selected car was not found in paired devices.");
 
         return;
       }
 
-      setCarDevice(citroen);
+      setCarDevice(car);
+
       setError("");
     } catch (err: any) {
       setError(err?.message || String(err));
@@ -108,10 +144,6 @@ export default function HomeScreen() {
       return;
     }
 
-    //
-    // Runtime POST_NOTIFICATIONS
-    // existuje od Android 13.
-    //
     if (Platform.Version < 33) {
       setNotificationsEnabled(true);
 
@@ -150,21 +182,16 @@ export default function HomeScreen() {
 
       setNotificationsEnabled(granted);
 
-      //
-      // Ak Android už ďalší popup
-      // nepovolí, pošleme používateľa
-      // do App Settings.
-      //
       if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
         await Linking.openSettings();
       }
-    } catch (err: any) {
+    } catch (err) {
       console.log("Notification permission error:", err);
     }
   };
 
   //
-  // ANDROID SYSTÉMOVÝ BLUETOOTH DIALÓG
+  // ANDROID BLUETOOTH DIALÓG
   //
   const turnOnBluetooth = async () => {
     try {
@@ -179,7 +206,7 @@ export default function HomeScreen() {
   };
 
   //
-  // ZATIAĽ MANUÁLNE POTVRDENIE LOCKED.
+  // DOČASNÉ MANUÁLNE LOCKED.
   // NESKÔR TO BUDE ROBIŤ NFC.
   //
   const confirmLocked = async () => {
@@ -189,38 +216,47 @@ export default function HomeScreen() {
   };
 
   //
-  // HLAVNÝ EFFECT
+  // NAČÍTAJ STAV CARLOCKU
+  //
+  const refreshState = async () => {
+    try {
+      const stored = await CarlockBluetoothModule.getStoredState();
+
+      const bluetoothOn = await CarlockBluetoothModule.isBluetoothEnabled();
+
+      setIsConnected(stored.connected);
+
+      setIsLocked(stored.locked);
+
+      setBluetoothEnabled(bluetoothOn);
+    } catch (err) {
+      console.log("State refresh error:", err);
+    }
+  };
+
+  //
+  // KEĎ SA HOME SCREEN ZNOVA ZOBRAZÍ
+  //
+  // Toto je dôležité pre:
+  // Settings -> Change car -> Back.
+  //
+  useFocusEffect(
+    useCallback(() => {
+      setupCar();
+
+      refreshState();
+
+      checkNotificationPermission();
+    }, []),
+  );
+
+  //
+  // LIVE LISTENERY
   //
   useEffect(() => {
-    setupCar();
-
     //
-    // Pri štarte permission iba
-    // kontrolujeme.
-    // Popup nepúšťame automaticky.
-    //
-    checkNotificationPermission();
-
-    const loadInitialState = async () => {
-      try {
-        const stored = await CarlockBluetoothModule.getStoredState();
-
-        const bluetoothOn = await CarlockBluetoothModule.isBluetoothEnabled();
-
-        setIsConnected(stored.connected);
-
-        setIsLocked(stored.locked);
-
-        setBluetoothEnabled(bluetoothOn);
-      } catch (err) {
-        console.log("Initial state error:", err);
-      }
-    };
-
-    loadInitialState();
-
-    //
-    // CITROEN CONNECT / DISCONNECT
+    // CITROEN / VYBRANÉ AUTO
+    // CONNECT + DISCONNECT
     //
     const carSubscription = CarlockBluetoothModule.addListener(
       "onCarConnectionChanged",
@@ -229,10 +265,6 @@ export default function HomeScreen() {
 
         setIsConnected(event.connected);
 
-        //
-        // Reálne CITROEN pripojenie
-        // znamená, že auto používame.
-        //
         if (event.connected) {
           setIsLocked(false);
         }
@@ -240,7 +272,8 @@ export default function HomeScreen() {
     );
 
     //
-    // BLUETOOTH TELEFÓNU ON / OFF
+    // BLUETOOTH TELEFÓNU
+    // ON / OFF
     //
     const bluetoothSubscription = CarlockBluetoothModule.addListener(
       "onBluetoothStateChanged",
@@ -251,22 +284,20 @@ export default function HomeScreen() {
 
         if (!event.enabled) {
           //
-          // Bluetooth OFF =
-          // auto nemôže byť práve
-          // connected.
-          //
-          setIsConnected(false);
-
+          // Bluetooth OFF:
+          // connection = false
           //
           // LOCKED / UNLOCKED
           // nemeníme.
           //
+          setIsConnected(false);
+
           return;
         }
 
         //
-        // Bluetooth ON samo osebe
-        // nesmie znamenať UNLOCKED.
+        // Bluetooth ON sám o sebe
+        // NESMIE znamenať UNLOCKED.
         //
         const stored = await CarlockBluetoothModule.getStoredState();
 
@@ -277,7 +308,7 @@ export default function HomeScreen() {
     );
 
     //
-    // APP SA VRÁTI DO FOREGROUNDU
+    // APP SA VRÁTI Z BACKGROUNDU
     //
     const appStateSubscription = AppState.addEventListener(
       "change",
@@ -286,54 +317,59 @@ export default function HomeScreen() {
           return;
         }
 
-        //
-        // Napríklad používateľ
-        // práve povolil notifications
-        // v Android Settings.
-        //
         await checkNotificationPermission();
 
-        const stored = await CarlockBluetoothModule.getStoredState();
+        await setupCar();
 
-        const bluetoothOn = await CarlockBluetoothModule.isBluetoothEnabled();
-
-        setIsConnected(stored.connected);
-
-        setIsLocked(stored.locked);
-
-        setBluetoothEnabled(bluetoothOn);
+        await refreshState();
       },
     );
 
     return () => {
       carSubscription.remove();
+
       bluetoothSubscription.remove();
+
       appStateSubscription.remove();
     };
   }, []);
 
   //
-  // VZHĽAD PRE JEDNOTLIVÉ STAVY
+  // NÁZOV AKTUÁLNEHO AUTA
+  //
+  const carName = carDevice?.name ?? "No car selected";
+
+  //
+  // VZHĽAD 3 STAVOV
   //
   const stateConfig = {
     LOCKED: {
       title: "LOCKED",
+
       subtitle: "Your car is secured.",
+
       icon: "lock-closed" as const,
+
       color: "#5EDB8A",
     },
 
     IN_CAR: {
       title: "IN CAR",
-      subtitle: "CITROEN is connected.",
+
+      subtitle: `${carName} is connected.`,
+
       icon: "car-sport" as const,
+
       color: "#EAF4FF",
     },
 
     UNCONFIRMED: {
       title: "UNLOCKED",
+
       subtitle: "Locking has not been confirmed.",
+
       icon: "lock-open" as const,
+
       color: "#FF5C1D",
     },
   };
@@ -342,35 +378,63 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
+      {/* HEADER */}
+
       <View style={styles.header}>
-        <View>
+        <View style={styles.headerTitle}>
           <Text style={styles.logo}>CarLock</Text>
 
-          <Text style={styles.carName}>{carDevice?.name ?? "CITROEN"}</Text>
+          <Text style={styles.carName} numberOfLines={1}>
+            {carName}
+          </Text>
         </View>
 
-        <View
-          style={[
-            styles.bluetoothPill,
-            !bluetoothEnabled && styles.bluetoothPillOff,
-          ]}
-        >
+        <View style={styles.headerActions}>
+          {/* BLUETOOTH STATUS */}
+
           <View
             style={[
-              styles.dot,
-              {
-                backgroundColor: bluetoothEnabled ? "#5EDB8A" : "#FF5C1D",
+              styles.bluetoothPill,
+
+              !bluetoothEnabled && styles.bluetoothPillOff,
+            ]}
+          >
+            <View
+              style={[
+                styles.dot,
+                {
+                  backgroundColor: bluetoothEnabled ? "#5EDB8A" : "#FF5C1D",
+                },
+              ]}
+            />
+
+            <Text style={styles.bluetoothPillText}>
+              Bluetooth {bluetoothEnabled ? "On" : "Off"}
+            </Text>
+          </View>
+
+          {/* SETTINGS */}
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.settingsButton,
+
+              pressed && {
+                opacity: 0.7,
               },
             ]}
-          />
-
-          <Text style={styles.bluetoothPillText}>
-            Bluetooth {bluetoothEnabled ? "On" : "Off"}
-          </Text>
+            onPress={() => router.push("/settings")}
+          >
+            <Ionicons name="settings-outline" size={22} color="#EAF4FF" />
+          </Pressable>
         </View>
       </View>
 
+      {/* MAIN CARD */}
+
       <View style={styles.mainCard}>
+        {/* MAIN ICON */}
+
         <View
           style={[
             styles.iconCircle,
@@ -391,6 +455,8 @@ export default function HomeScreen() {
           <Ionicons name={current.icon} size={68} color={current.color} />
         </View>
 
+        {/* STATUS */}
+
         <Text
           style={[
             styles.stateTitle,
@@ -403,6 +469,8 @@ export default function HomeScreen() {
         </Text>
 
         <Text style={styles.stateSubtitle}>{current.subtitle}</Text>
+
+        {/* CAR CONNECTION */}
 
         <View style={styles.connectionCard}>
           <View style={styles.connectionLeft}>
@@ -423,8 +491,10 @@ export default function HomeScreen() {
               />
             </View>
 
-            <View>
-              <Text style={styles.connectionTitle}>CITROEN</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.connectionTitle} numberOfLines={1}>
+                {carName}
+              </Text>
 
               <Text style={styles.connectionSubtitle}>Car connection</Text>
             </View>
@@ -463,6 +533,7 @@ export default function HomeScreen() {
             <Pressable
               style={({ pressed }) => [
                 styles.bluetoothButton,
+
                 pressed && {
                   opacity: 0.8,
                 },
@@ -504,6 +575,7 @@ export default function HomeScreen() {
             <Pressable
               style={({ pressed }) => [
                 styles.notificationButton,
+
                 pressed && {
                   opacity: 0.8,
                 },
@@ -523,7 +595,7 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* UNCONFIRMED WARNING */}
+        {/* UNCONFIRMED */}
 
         {carState === "UNCONFIRMED" && (
           <View style={styles.warning}>
@@ -540,10 +612,13 @@ export default function HomeScreen() {
           </View>
         )}
 
+        {/* MANUAL LOCK */}
+
         {carState === "UNCONFIRMED" && (
           <Pressable
             style={({ pressed }) => [
               styles.lockButton,
+
               pressed && {
                 opacity: 0.82,
               },
@@ -556,6 +631,8 @@ export default function HomeScreen() {
           </Pressable>
         )}
 
+        {/* ERROR */}
+
         {error ? <Text style={styles.error}>{error}</Text> : null}
       </View>
     </View>
@@ -565,39 +642,71 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+
     backgroundColor: "#081B3A",
+
     paddingHorizontal: 22,
+
     paddingTop: 68,
   },
 
   header: {
     flexDirection: "row",
+
     justifyContent: "space-between",
+
     alignItems: "center",
+
     marginBottom: 28,
+  },
+
+  headerTitle: {
+    flex: 1,
+
+    marginRight: 12,
+  },
+
+  headerActions: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: 10,
   },
 
   logo: {
     color: "#EAF4FF",
+
     fontSize: 32,
+
     fontWeight: "900",
+
     letterSpacing: 0.5,
   },
 
   carName: {
     color: "#7084A8",
+
     fontSize: 13,
+
     fontWeight: "700",
+
     marginTop: 3,
-    letterSpacing: 1.4,
+
+    letterSpacing: 1.2,
   },
 
   bluetoothPill: {
     flexDirection: "row",
+
     alignItems: "center",
-    paddingHorizontal: 12,
+
+    paddingHorizontal: 11,
+
     paddingVertical: 8,
+
     backgroundColor: "rgba(94,219,138,0.08)",
+
     borderRadius: 999,
   },
 
@@ -607,261 +716,411 @@ const styles = StyleSheet.create({
 
   bluetoothPillText: {
     color: "#B7C9E5",
-    fontSize: 12,
+
+    fontSize: 11,
+
     fontWeight: "700",
   },
 
   dot: {
     width: 7,
+
     height: 7,
+
     borderRadius: 4,
+
     marginRight: 7,
+  },
+
+  settingsButton: {
+    width: 40,
+
+    height: 40,
+
+    borderRadius: 13,
+
+    backgroundColor: "#10264F",
+
+    borderWidth: 1,
+
+    borderColor: "#214B8F",
+
+    justifyContent: "center",
+
+    alignItems: "center",
   },
 
   mainCard: {
     width: "100%",
+
     backgroundColor: "#10264F",
+
     borderRadius: 30,
+
     padding: 24,
+
     alignItems: "center",
+
     borderWidth: 1,
+
     borderColor: "#214B8F",
   },
 
   iconCircle: {
     width: 160,
+
     height: 160,
+
     borderRadius: 80,
+
     borderWidth: 2,
+
     justifyContent: "center",
+
     alignItems: "center",
+
     marginTop: 10,
+
     marginBottom: 25,
+
     overflow: "hidden",
   },
 
   iconGlow: {
     position: "absolute",
+
     width: 95,
+
     height: 95,
+
     borderRadius: 48,
+
     opacity: 0.08,
   },
 
   stateTitle: {
     fontSize: 41,
+
     fontWeight: "900",
+
     letterSpacing: 1,
   },
 
   stateSubtitle: {
     color: "#9FB7D9",
+
     fontSize: 15,
+
     marginTop: 6,
+
     marginBottom: 28,
+
     textAlign: "center",
   },
 
   connectionCard: {
     width: "100%",
+
     flexDirection: "row",
+
     justifyContent: "space-between",
+
     alignItems: "center",
+
     padding: 15,
+
     backgroundColor: "rgba(255,255,255,0.035)",
+
     borderRadius: 17,
+
     marginBottom: 15,
   },
 
   connectionLeft: {
+    flex: 1,
+
     flexDirection: "row",
+
     alignItems: "center",
+
+    marginRight: 10,
   },
 
   connectionIcon: {
     width: 44,
+
     height: 44,
+
     borderRadius: 13,
+
     justifyContent: "center",
+
     alignItems: "center",
+
     marginRight: 12,
   },
 
   connectionTitle: {
     color: "#EAF4FF",
+
     fontSize: 15,
+
     fontWeight: "800",
   },
 
   connectionSubtitle: {
     color: "#7084A8",
+
     fontSize: 12,
+
     marginTop: 2,
   },
 
   connectionStatus: {
     fontSize: 12,
+
     fontWeight: "800",
   },
 
   bluetoothCard: {
     width: "100%",
+
     backgroundColor: "rgba(255,92,29,0.08)",
+
     borderWidth: 1,
+
     borderColor: "rgba(255,92,29,0.35)",
+
     borderRadius: 18,
+
     padding: 16,
+
     marginBottom: 15,
   },
 
   bluetoothTop: {
     flexDirection: "row",
+
     alignItems: "center",
+
     marginBottom: 15,
   },
 
   bluetoothIcon: {
     width: 45,
+
     height: 45,
+
     borderRadius: 14,
+
     backgroundColor: "rgba(255,92,29,0.12)",
+
     justifyContent: "center",
+
     alignItems: "center",
+
     marginRight: 13,
   },
 
   bluetoothTitle: {
     color: "#EAF4FF",
+
     fontSize: 15,
+
     fontWeight: "800",
   },
 
   bluetoothText: {
     color: "#9FB7D9",
+
     fontSize: 13,
+
     lineHeight: 18,
+
     marginTop: 3,
   },
 
   bluetoothButton: {
     width: "100%",
+
     backgroundColor: "#FF5C1D",
+
     borderRadius: 14,
+
     paddingVertical: 14,
+
     flexDirection: "row",
+
     justifyContent: "center",
+
     alignItems: "center",
+
     gap: 8,
   },
 
   bluetoothButtonText: {
     color: "#FFFFFF",
+
     fontWeight: "800",
+
     fontSize: 15,
   },
 
   notificationCard: {
     width: "100%",
+
     backgroundColor: "rgba(255,92,29,0.08)",
+
     borderWidth: 1,
+
     borderColor: "rgba(255,92,29,0.35)",
+
     borderRadius: 18,
+
     padding: 16,
+
     marginBottom: 15,
   },
 
   notificationTop: {
     flexDirection: "row",
+
     alignItems: "center",
+
     marginBottom: 15,
   },
 
   notificationIcon: {
     width: 45,
+
     height: 45,
+
     borderRadius: 14,
+
     backgroundColor: "rgba(255,92,29,0.12)",
+
     justifyContent: "center",
+
     alignItems: "center",
+
     marginRight: 13,
   },
 
   notificationTitle: {
     color: "#EAF4FF",
+
     fontSize: 15,
+
     fontWeight: "800",
   },
 
   notificationText: {
     color: "#9FB7D9",
+
     fontSize: 13,
+
     lineHeight: 18,
+
     marginTop: 3,
   },
 
   notificationButton: {
     width: "100%",
+
     backgroundColor: "#FF5C1D",
+
     borderRadius: 14,
+
     paddingVertical: 14,
+
     flexDirection: "row",
+
     justifyContent: "center",
+
     alignItems: "center",
+
     gap: 8,
   },
 
   notificationButtonText: {
     color: "#FFFFFF",
+
     fontWeight: "800",
+
     fontSize: 15,
   },
 
   warning: {
     width: "100%",
+
     flexDirection: "row",
+
     gap: 12,
+
     backgroundColor: "rgba(255,92,29,0.08)",
+
     borderWidth: 1,
+
     borderColor: "rgba(255,92,29,0.32)",
+
     borderRadius: 17,
+
     padding: 15,
+
     marginBottom: 15,
   },
 
   warningTitle: {
     color: "#FF8A5B",
+
     fontSize: 14,
+
     fontWeight: "800",
+
     marginBottom: 3,
   },
 
   warningText: {
     color: "#9FB7D9",
+
     fontSize: 13,
+
     lineHeight: 18,
   },
 
   lockButton: {
     width: "100%",
+
     backgroundColor: "#2F66C2",
+
     borderRadius: 16,
+
     paddingVertical: 16,
+
     flexDirection: "row",
+
     justifyContent: "center",
+
     alignItems: "center",
+
     gap: 9,
   },
 
   lockButtonText: {
     color: "#FFFFFF",
+
     fontSize: 16,
+
     fontWeight: "800",
   },
 
   error: {
     color: "#FF5C1D",
+
     textAlign: "center",
+
     marginTop: 15,
+
     fontSize: 13,
   },
 });
