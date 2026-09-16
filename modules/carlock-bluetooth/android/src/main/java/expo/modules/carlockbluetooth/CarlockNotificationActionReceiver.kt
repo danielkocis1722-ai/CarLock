@@ -21,16 +21,17 @@ class CarlockNotificationActionReceiver : BroadcastReceiver() {
         when (intent.action) {
 
             ACTION_LOCKED -> {
-                //
-                // Používateľ potvrdil,
-                // že auto zamkol.
-                //
                 prefs.edit()
                     .putBoolean(
                         "locked",
                         true
                     )
                     .apply()
+
+                notifyLockStateChanged(
+                    context,
+                    true
+                )
 
                 Log.d(
                     "CarLockBT",
@@ -43,10 +44,18 @@ class CarlockNotificationActionReceiver : BroadcastReceiver() {
             }
 
             ACTION_KEEP_UNLOCKED -> {
-                //
-                // Auto ostáva UNLOCKED.
-                // Nič nemeníme v locked=false.
-                //
+                prefs.edit()
+                    .putBoolean(
+                        "locked",
+                        false
+                    )
+                    .apply()
+
+                notifyLockStateChanged(
+                    context,
+                    false
+                )
+
                 Log.d(
                     "CarLockBT",
                     "Notification action: KEEP UNLOCKED"
@@ -57,6 +66,28 @@ class CarlockNotificationActionReceiver : BroadcastReceiver() {
                 )
             }
         }
+    }
+
+    private fun notifyLockStateChanged(
+        context: Context,
+        locked: Boolean
+    ) {
+        val stateIntent =
+            Intent(
+                CarlockBluetoothModule.ACTION_LOCK_STATE_CHANGED
+            ).apply {
+                setPackage(
+                    context.packageName
+                )
+                putExtra(
+                    CarlockBluetoothModule.EXTRA_LOCKED,
+                    locked
+                )
+            }
+
+        context.sendBroadcast(
+            stateIntent
+        )
     }
 
     private fun dismissNotification(
