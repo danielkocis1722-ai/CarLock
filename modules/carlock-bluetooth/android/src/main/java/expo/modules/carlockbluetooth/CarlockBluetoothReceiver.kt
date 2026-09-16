@@ -83,10 +83,6 @@ class CarlockBluetoothReceiver :
             "BACKGROUND event=${intent.action}, device=$name, address=${device?.address}"
         )
 
-        //
-        // NOVÉ:
-        // filtrujeme selected car
-        //
         if (
             !isSelectedCar(
                 context,
@@ -220,11 +216,6 @@ class CarlockBluetoothReceiver :
                             System.currentTimeMillis()
                         )
                         .apply()
-
-                    //
-                    // Reminder tu nedávame.
-                    // Čakáme na ACL disconnect.
-                    //
                 }
             }
         }
@@ -265,11 +256,6 @@ class CarlockBluetoothReceiver :
                 ) == true
         }
 
-        //
-        // Migration fallback:
-        // kým si nič nevybral,
-        // sleduj CITROEN.
-        //
         val nameToMatch =
             selectedName
                 ?: "CITROEN"
@@ -302,23 +288,67 @@ class CarlockBluetoothReceiver :
                 REMINDER_REQUEST_CODE,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or
-                        PendingIntent.FLAG_IMMUTABLE
+                    PendingIntent.FLAG_IMMUTABLE
             )
 
         val triggerAt =
             System.currentTimeMillis() +
-                    REMINDER_DELAY_MS
+                REMINDER_DELAY_MS
 
-        alarmManager.setAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            triggerAt,
-            pendingIntent
-        )
+        try {
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                alarmManager.canScheduleExactAlarms()
+            ) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
 
-        Log.d(
-            "CarLockBT",
-            "Lock reminder scheduled for 15 seconds"
-        )
+                Log.d(
+                    "CarLockBT",
+                    "Exact lock reminder scheduled for 15 seconds"
+                )
+            } else if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+            ) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+
+                Log.d(
+                    "CarLockBT",
+                    "Exact lock reminder scheduled for 15 seconds"
+                )
+            } else {
+                // Fallback if exact alarms are not allowed yet.
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+
+                Log.d(
+                    "CarLockBT",
+                    "Exact alarm permission missing -> fallback reminder scheduled"
+                )
+            }
+        } catch (e: SecurityException) {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerAt,
+                pendingIntent
+            )
+
+            Log.d(
+                "CarLockBT",
+                "Exact alarm SecurityException=${e.message} -> fallback reminder scheduled"
+            )
+        }
     }
 
     private fun cancelLockReminder(
@@ -341,7 +371,7 @@ class CarlockBluetoothReceiver :
                 REMINDER_REQUEST_CODE,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or
-                        PendingIntent.FLAG_IMMUTABLE
+                    PendingIntent.FLAG_IMMUTABLE
             )
 
         alarmManager.cancel(
@@ -351,12 +381,10 @@ class CarlockBluetoothReceiver :
 
     companion object {
 
-        private const val
-                REMINDER_REQUEST_CODE =
+        private const val REMINDER_REQUEST_CODE =
             2001
 
-        private const val
-                REMINDER_DELAY_MS =
+        private const val REMINDER_DELAY_MS =
             15_000L
     }
 }
