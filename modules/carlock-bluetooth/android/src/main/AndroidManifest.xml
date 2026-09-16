@@ -6,6 +6,9 @@
     <uses-permission
         android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <application>
 
         <receiver
@@ -40,9 +43,9 @@
             android:exported="false" />
 
         <receiver
-    android:name=".CarlockNotificationActionReceiver"
-    android:enabled="true"
-    android:exported="false" />
+            android:name=".CarlockNotificationActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
 
     </application>
 
