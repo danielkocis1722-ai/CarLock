@@ -12,91 +12,46 @@ class CarlockNotificationActionReceiver : BroadcastReceiver() {
         context: Context,
         intent: Intent
     ) {
-        val prefs =
-            context.getSharedPreferences(
-                "carlock_state",
-                Context.MODE_PRIVATE
-            )
+        val prefs = context.getSharedPreferences(
+            "carlock_state",
+            Context.MODE_PRIVATE
+        )
 
         when (intent.action) {
-
             ACTION_LOCKED -> {
                 prefs.edit()
-                    .putBoolean(
-                        "locked",
-                        true
-                    )
+                    .putBoolean("locked", true)
                     .apply()
-
-                notifyLockStateChanged(
-                    context,
-                    true
-                )
 
                 Log.d(
                     "CarLockBT",
                     "Notification action: I LOCKED IT"
                 )
 
-                dismissNotification(
-                    context
-                )
+                dismissNotification(context)
             }
 
             ACTION_KEEP_UNLOCKED -> {
                 prefs.edit()
-                    .putBoolean(
-                        "locked",
-                        false
-                    )
+                    .putBoolean("locked", false)
                     .apply()
-
-                notifyLockStateChanged(
-                    context,
-                    false
-                )
 
                 Log.d(
                     "CarLockBT",
                     "Notification action: KEEP UNLOCKED"
                 )
 
-                dismissNotification(
-                    context
-                )
+                dismissNotification(context)
             }
         }
-    }
-
-    private fun notifyLockStateChanged(
-        context: Context,
-        locked: Boolean
-    ) {
-        val stateIntent =
-            Intent(
-                CarlockBluetoothModule.ACTION_LOCK_STATE_CHANGED
-            ).apply {
-                setPackage(
-                    context.packageName
-                )
-                putExtra(
-                    CarlockBluetoothModule.EXTRA_LOCKED,
-                    locked
-                )
-            }
-
-        context.sendBroadcast(
-            stateIntent
-        )
     }
 
     private fun dismissNotification(
         context: Context
     ) {
-        val manager =
-            context.getSystemService(
-                Context.NOTIFICATION_SERVICE
-            ) as NotificationManager
+        val manager = context.getSystemService(
+            Context.NOTIFICATION_SERVICE
+        ) as NotificationManager
 
         manager.cancel(
             CarlockReminderReceiver.NOTIFICATION_ID
