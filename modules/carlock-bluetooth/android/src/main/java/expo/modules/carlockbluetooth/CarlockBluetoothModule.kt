@@ -11,6 +11,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -23,22 +24,31 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class CarlockBluetoothModule : Module() {
 
     private var receiverRegistered = false
+    private var prefsListenerRegistered = false
+
+    private val prefsListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key != "locked") return@OnSharedPreferenceChangeListener
+
+            val locked = prefs.getBoolean(
+                "locked",
+                true
+            )
+
+            sendEvent(
+                "onLockStateChanged",
+                bundleOf("locked" to locked)
+            )
+
+            Log.d(
+                "CarLockBT",
+                "LIVE shared locked state changed=$locked"
+            )
+        }
 
     private val bluetoothReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent == null) return
-
-            if (intent.action == ACTION_LOCK_STATE_CHANGED) {
-                val locked = intent.getBooleanExtra(EXTRA_LOCKED, false)
-
-                sendEvent(
-                    "onLockStateChanged",
-                    bundleOf("locked" to locked)
-                )
-
-                Log.d("CarLockBT", "LIVE lock state changed=$locked")
-                return
-            }
 
             if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
                 val state = intent.getIntExtra(
@@ -273,11 +283,6 @@ class CarlockBluetoothModule : Module() {
                 cancelLockReminder(context)
             }
 
-            sendEvent(
-                "onLockStateChanged",
-                bundleOf("locked" to locked)
-            )
-
             Log.d("CarLockBT", "Manual locked state=$locked")
         }
 
@@ -287,14 +292,17 @@ class CarlockBluetoothModule : Module() {
 
         OnStartObserving("onCarConnectionChanged") {
             registerReceiver()
+            registerPrefsListener()
         }
 
         OnStopObserving("onCarConnectionChanged") {
             unregisterReceiver()
+            unregisterPrefsListener()
         }
 
         OnDestroy {
             unregisterReceiver()
+            unregisterPrefsListener()
         }
     }
 
@@ -342,7 +350,6 @@ class CarlockBluetoothModule : Module() {
         val context = appContext.reactContext ?: return
 
         val filter = IntentFilter().apply {
-            addAction(ACTION_LOCK_STATE_CHANGED)
             addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
             addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
             addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
@@ -371,6 +378,36 @@ class CarlockBluetoothModule : Module() {
         }
 
         receiverRegistered = false
+    }
+
+    private fun registerPrefsListener() {
+        if (prefsListenerRegistered) return
+
+        val context = appContext.reactContext ?: return
+
+        context.getSharedPreferences(
+            "carlock_state",
+            Context.MODE_PRIVATE
+        ).registerOnSharedPreferenceChangeListener(
+            prefsListener
+        )
+
+        prefsListenerRegistered = true
+    }
+
+    private fun unregisterPrefsListener() {
+        if (!prefsListenerRegistered) return
+
+        val context = appContext.reactContext ?: return
+
+        context.getSharedPreferences(
+            "carlock_state",
+            Context.MODE_PRIVATE
+        ).unregisterOnSharedPreferenceChangeListener(
+            prefsListener
+        )
+
+        prefsListenerRegistered = false
     }
 
     private fun sendCarEvent(
@@ -477,13 +514,5 @@ class CarlockBluetoothModule : Module() {
         } catch (_: SecurityException) {
             false
         }
-    }
-
-    companion object {
-        const val ACTION_LOCK_STATE_CHANGED =
-            "expo.modules.carlockbluetooth.ACTION_LOCK_STATE_CHANGED"
-
-        const val EXTRA_LOCKED =
-            "expo.modules.carlockbluetooth.EXTRA_LOCKED"
     }
 }
