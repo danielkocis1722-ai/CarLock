@@ -24,6 +24,11 @@ type CarlockBluetoothEvents = {
   onBluetoothStateChanged: (event: { enabled: boolean }) => void;
 
   onLockStateChanged: (event: { locked: boolean }) => void;
+
+  onNfcEnrollmentFinished: (event: {
+    success: boolean;
+    address: string | null;
+  }) => void;
 };
 
 declare class CarlockBluetoothModule extends NativeModule<CarlockBluetoothEvents> {
@@ -44,6 +49,12 @@ declare class CarlockBluetoothModule extends NativeModule<CarlockBluetoothEvents
   getSelectedCar(): Promise<SelectedCar>;
 
   setSelectedCar(name: string, address: string): Promise<void>;
+
+  activateVehicle(
+    name: string,
+    address: string,
+    nfcTagId: string | null,
+  ): Promise<void>;
 }
 
 export default requireNativeModule<CarlockBluetoothModule>("CarlockBluetooth");

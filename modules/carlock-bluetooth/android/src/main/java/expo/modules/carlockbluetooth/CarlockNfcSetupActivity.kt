@@ -2,6 +2,8 @@ package expo.modules.carlockbluetooth
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.graphics.Color
 import android.nfc.NfcAdapter
 import android.os.Bundle
 import android.view.Gravity
@@ -16,8 +18,12 @@ class CarlockNfcSetupActivity : Activity() {
         super.onCreate(savedInstanceState)
         selectedAddress = getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
             .getString("selectedCarAddress", null)
+        val vehicleName = getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
+            .getString("selectedCarName", "your vehicle")
         setContentView(TextView(this).apply {
-            text = "Hold your lock confirmation NFC tag near the phone.\n\nPress Back to cancel."
+            text = "Configure NFC tag for $vehicleName\n\nHold the back of your phone near the NFC tag.\n\nPress Back to cancel."
+            setBackgroundColor(Color.rgb(8, 27, 58))
+            setTextColor(Color.rgb(234, 244, 255))
             gravity = Gravity.CENTER
             setPadding(48, 48, 48, 48)
             textSize = 20f
@@ -39,7 +45,11 @@ class CarlockNfcSetupActivity : Activity() {
                 if (!isFinishing && id.isNotBlank() &&
                     prefs.getString("selectedCarAddress", null) == selectedAddress) {
                     prefs.edit().putString("nfcTagId", id).apply()
-                    Toast.makeText(this, "NFC lock tag configured.", Toast.LENGTH_SHORT).show()
+                    // Require a fresh tap after enrollment, rather than confirming a tag
+                    // still held against the phone when the main activity resumes.
+                    adapter.ignore(tag, 500, null, null)
+                    setResult(RESULT_OK, Intent().putExtra("address", selectedAddress))
+                    Toast.makeText(this, "NFC tag configured successfully.", Toast.LENGTH_SHORT).show()
                     finish()
                 }
             }

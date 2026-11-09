@@ -8,12 +8,15 @@ import {
   PermissionsAndroid,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 
-import RNBluetoothClassic from "react-native-bluetooth-classic";
+import { useVehicles } from "@/state/vehicles";
+import { LocksoraGuide } from "@/components/locksora-guide";
+import { useLocksoraGuide } from "@/hooks/use-locksora-guide";
 
 import CarlockBluetoothModule from "../../modules/carlock-bluetooth/src/CarlockBluetoothModule";
 
@@ -22,7 +25,14 @@ type CarState = "LOCKED" | "IN_CAR" | "UNCONFIRMED";
 export default function HomeScreen() {
   const router = useRouter();
 
-  const [carDevice, setCarDevice] = useState<any>(null);
+  const {
+    activeVehicle,
+    activeVehicleId,
+    ready,
+    refresh,
+    error: vehicleError,
+  } = useVehicles();
+  const guide = useLocksoraGuide();
 
   const [isConnected, setIsConnected] = useState(false);
 
@@ -42,97 +52,6 @@ export default function HomeScreen() {
     : isConnected
       ? "IN_CAR"
       : "UNCONFIRMED";
-
-  //
-  // BLUETOOTH PERMISSIONS
-  //
-  const requestBluetoothPermissions = async () => {
-    if (Platform.OS !== "android") {
-      return true;
-    }
-
-    if (Platform.Version >= 31) {
-      const result = await PermissionsAndroid.requestMultiple([
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-      ]);
-
-      return (
-        result["android.permission.BLUETOOTH_CONNECT"] ===
-          PermissionsAndroid.RESULTS.GRANTED &&
-        result["android.permission.BLUETOOTH_SCAN"] ===
-          PermissionsAndroid.RESULTS.GRANTED
-      );
-    }
-
-    return true;
-  };
-
-  //
-  // NAČÍTAJ VYBRANÉ AUTO
-  //
-  const setupCar = async () => {
-    try {
-      const granted = await requestBluetoothPermissions();
-
-      if (!granted) {
-        setError("Bluetooth permission denied.");
-
-        return;
-      }
-
-      const devices = await RNBluetoothClassic.getBondedDevices();
-
-      let selected = await CarlockBluetoothModule.getSelectedCar();
-
-      //
-      // MIGRÁCIA PRE TVOJ EXISTUJÚCI CARLOCK:
-      // ak ešte nemáme vybrané auto,
-      // automaticky vyberieme CITROEN.
-      //
-      if (!selected.address) {
-        const citroen = devices.find(
-          (device: any) => device.name?.trim().toUpperCase() === "CITROEN",
-        );
-
-        if (citroen) {
-          await CarlockBluetoothModule.setSelectedCar(
-            citroen.name ?? "CITROEN",
-            citroen.address,
-          );
-
-          selected = {
-            name: citroen.name ?? "CITROEN",
-            address: citroen.address,
-          };
-        }
-      }
-
-      //
-      // NÁJDI VYBRANÉ AUTO
-      // POD BLUETOOTH ADRESY.
-      //
-      const car = devices.find(
-        (device: any) =>
-          device.address?.toUpperCase() === selected.address?.toUpperCase(),
-      );
-
-      if (!car) {
-        setCarDevice(null);
-
-        setError("Selected car was not found in paired devices.");
-
-        return;
-      }
-
-      setCarDevice(car);
-
-      setError("");
-    } catch (err: any) {
-      setError(err?.message || String(err));
-    }
-  };
 
   //
   // SKONTROLUJ NOTIFICATION PERMISSION
@@ -241,12 +160,12 @@ export default function HomeScreen() {
   //
   useFocusEffect(
     useCallback(() => {
-      setupCar();
-
-      refreshState();
+      refresh()
+        .then(refreshState)
+        .catch((err) => setError(err.message));
 
       checkNotificationPermission();
-    }, []),
+    }, [refresh, activeVehicleId]),
   );
 
   //
@@ -321,11 +240,18 @@ export default function HomeScreen() {
           return;
         }
 
-        await checkNotificationPermission();
-
-        await setupCar();
-
-        await refreshState();
+        try {
+          await checkNotificationPermission();
+          await refresh();
+          await refreshState();
+          setError("");
+        } catch (err) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Could not refresh your vehicle.",
+          );
+        }
       },
     );
 
@@ -343,7 +269,7 @@ export default function HomeScreen() {
   //
   // NÁZOV AKTUÁLNEHO AUTA
   //
-  const carName = carDevice?.name ?? "No car selected";
+  const carName = activeVehicle?.name ?? "No vehicle selected";
 
   //
   // VZHĽAD 3 STAVOV
@@ -383,21 +309,53 @@ export default function HomeScreen() {
   const current = stateConfig[carState];
 
   return (
-    <View style={styles.container}>
-      {/* HEADER */}
+    <>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={{ paddingBottom: 100 }}
+      >
+        {/* HEADER */}
 
-      <View style={styles.header}>
-        <View style={styles.headerTitle}>
-          <Text style={styles.logo}>CarLock</Text>
+        <View style={styles.header}>
+          <View style={styles.headerTitle}>
+            <Text style={styles.logo}>Locksora</Text>
 
-          <Text style={styles.carName} numberOfLines={1}>
-            {carName}
-          </Text>
+            <Text style={styles.carName} numberOfLines={1}>
+              {carName}
+            </Text>
+          </View>
+
+          <View style={styles.headerActions}>
+            <Pressable
+              style={styles.settingsButton}
+              onPress={guide.open}
+              accessibilityRole="button"
+              accessibilityLabel="Open Locksora guide"
+            >
+              <Ionicons name="help-outline" size={22} color="#EAF4FF" />
+            </Pressable>
+
+            {/* SETTINGS */}
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.settingsButton,
+
+                pressed && {
+                  opacity: 0.7,
+                },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Open Settings"
+              onPress={() => router.push("/settings")}
+            >
+              <Ionicons name="settings-outline" size={22} color="#EAF4FF" />
+            </Pressable>
+          </View>
         </View>
 
-        <View style={styles.headerActions}>
+        <View style={{ alignItems: "flex-start", marginBottom: 20 }}>
           {/* BLUETOOTH STATUS */}
-
           <View
             style={[
               styles.bluetoothPill,
@@ -418,230 +376,253 @@ export default function HomeScreen() {
               Bluetooth {bluetoothEnabled ? "On" : "Off"}
             </Text>
           </View>
-
-          {/* SETTINGS */}
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.settingsButton,
-
-              pressed && {
-                opacity: 0.7,
-              },
-            ]}
-            onPress={() => router.push("/settings")}
-          >
-            <Ionicons name="settings-outline" size={22} color="#EAF4FF" />
-          </Pressable>
-        </View>
-      </View>
-
-      {/* MAIN CARD */}
-
-      <View style={styles.mainCard}>
-        {/* MAIN ICON */}
-
-        <View
-          style={[
-            styles.iconCircle,
-            {
-              borderColor: current.color,
-            },
-          ]}
-        >
-          <View
-            style={[
-              styles.iconGlow,
-              {
-                backgroundColor: current.color,
-              },
-            ]}
-          />
-
-          <Ionicons name={current.icon} size={68} color={current.color} />
         </View>
 
-        {/* STATUS */}
+        {/* MAIN CARD */}
 
-        <Text
-          style={[
-            styles.stateTitle,
-            {
-              color: current.color,
-            },
-          ]}
-        >
-          {current.title}
-        </Text>
-
-        <Text style={styles.stateSubtitle}>{current.subtitle}</Text>
-
-        {/* CAR CONNECTION */}
-
-        <View style={styles.connectionCard}>
-          <View style={styles.connectionLeft}>
-            <View
-              style={[
-                styles.connectionIcon,
-                {
-                  backgroundColor: isConnected
-                    ? "rgba(94,219,138,0.12)"
-                    : "rgba(159,183,217,0.08)",
-                },
-              ]}
-            >
-              <Ionicons
-                name="car-outline"
-                size={22}
-                color={isConnected ? "#5EDB8A" : "#9FB7D9"}
-              />
-            </View>
-
-            <View style={{ flex: 1 }}>
-              <Text style={styles.connectionTitle} numberOfLines={1}>
-                {carName}
+        <View style={styles.mainCard}>
+          {!ready ? (
+            <Text style={styles.stateSubtitle}>Loading your vehicle…</Text>
+          ) : !activeVehicle ? (
+            <View style={{ alignItems: "center", gap: 18 }}>
+              <Ionicons name="car-sport-outline" size={64} color="#9FB7D9" />
+              <Text style={[styles.stateSubtitle, { marginBottom: 0 }]}>
+                Add your first vehicle to get started.
               </Text>
-
-              <Text style={styles.connectionSubtitle}>Car connection</Text>
+              <Pressable
+                style={styles.lockButton}
+                onPress={() => router.push("/settings")}
+              >
+                <Text style={styles.lockButtonText}>Add vehicle</Text>
+              </Pressable>
             </View>
-          </View>
+          ) : (
+            <>
+              {/* MAIN ICON */}
 
-          <Text
-            style={[
-              styles.connectionStatus,
-              {
-                color: isConnected ? "#5EDB8A" : "#9FB7D9",
-              },
-            ]}
-          >
-            {isConnected ? "Connected" : "Disconnected"}
-          </Text>
-        </View>
-
-        {/* BLUETOOTH WARNING */}
-
-        {!bluetoothEnabled && (
-          <View style={styles.bluetoothCard}>
-            <View style={styles.bluetoothTop}>
-              <View style={styles.bluetoothIcon}>
-                <Ionicons name="bluetooth" size={25} color="#FF5C1D" />
-              </View>
-
-              <View style={{ flex: 1 }}>
-                <Text style={styles.bluetoothTitle}>Bluetooth is off</Text>
-
-                <Text style={styles.bluetoothText}>
-                  Turn it on so CarLock can detect your car.
-                </Text>
-              </View>
-            </View>
-
-            <Pressable
-              style={({ pressed }) => [
-                styles.bluetoothButton,
-
-                pressed && {
-                  opacity: 0.8,
-                },
-              ]}
-              onPress={turnOnBluetooth}
-            >
-              <Ionicons name="bluetooth" size={20} color="#FFFFFF" />
-
-              <Text style={styles.bluetoothButtonText}>Turn on Bluetooth</Text>
-            </Pressable>
-          </View>
-        )}
-
-        {/* NOTIFICATION WARNING */}
-
-        {!notificationsEnabled && (
-          <View style={styles.notificationCard}>
-            <View style={styles.notificationTop}>
-              <View style={styles.notificationIcon}>
-                <Ionicons
-                  name="notifications-off-outline"
-                  size={25}
-                  color="#FF5C1D"
+              <View
+                style={[
+                  styles.iconCircle,
+                  {
+                    borderColor: current.color,
+                  },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.iconGlow,
+                    {
+                      backgroundColor: current.color,
+                    },
+                  ]}
                 />
+
+                <Ionicons name={current.icon} size={68} color={current.color} />
               </View>
 
-              <View style={{ flex: 1 }}>
-                <Text style={styles.notificationTitle}>
-                  Notifications are off
-                </Text>
+              {/* STATUS */}
 
-                <Text style={styles.notificationText}>
-                  Enable notifications so CarLock can remind you when locking
-                  has not been confirmed.
+              <Text
+                style={[
+                  styles.stateTitle,
+                  {
+                    color: current.color,
+                  },
+                ]}
+              >
+                {current.title}
+              </Text>
+
+              <Text style={styles.stateSubtitle}>{current.subtitle}</Text>
+
+              {/* CAR CONNECTION */}
+
+              <View style={styles.connectionCard}>
+                <View style={styles.connectionLeft}>
+                  <View
+                    style={[
+                      styles.connectionIcon,
+                      {
+                        backgroundColor: isConnected
+                          ? "rgba(94,219,138,0.12)"
+                          : "rgba(159,183,217,0.08)",
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="car-outline"
+                      size={22}
+                      color={isConnected ? "#5EDB8A" : "#9FB7D9"}
+                    />
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.connectionTitle} numberOfLines={1}>
+                      {carName}
+                    </Text>
+
+                    <Text style={styles.connectionSubtitle}>
+                      Car connection
+                    </Text>
+                  </View>
+                </View>
+
+                <Text
+                  style={[
+                    styles.connectionStatus,
+                    {
+                      color: isConnected ? "#5EDB8A" : "#9FB7D9",
+                    },
+                  ]}
+                >
+                  {isConnected ? "Connected" : "Disconnected"}
                 </Text>
               </View>
-            </View>
 
-            <Pressable
-              style={({ pressed }) => [
-                styles.notificationButton,
+              {/* BLUETOOTH WARNING */}
 
-                pressed && {
-                  opacity: 0.8,
-                },
-              ]}
-              onPress={requestNotificationPermission}
-            >
-              <Ionicons
-                name="notifications-outline"
-                size={20}
-                color="#FFFFFF"
-              />
+              {!bluetoothEnabled && (
+                <View style={styles.bluetoothCard}>
+                  <View style={styles.bluetoothTop}>
+                    <View style={styles.bluetoothIcon}>
+                      <Ionicons name="bluetooth" size={25} color="#FF5C1D" />
+                    </View>
 
-              <Text style={styles.notificationButtonText}>
-                Enable notifications
-              </Text>
-            </Pressable>
-          </View>
-        )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.bluetoothTitle}>
+                        Bluetooth is off
+                      </Text>
 
-        {/* UNCONFIRMED */}
+                      <Text style={styles.bluetoothText}>
+                        Turn it on so Locksora can detect your car.
+                      </Text>
+                    </View>
+                  </View>
 
-        {carState === "UNCONFIRMED" && (
-          <View style={styles.warning}>
-            <Ionicons name="alert-circle-outline" size={24} color="#FF5C1D" />
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.bluetoothButton,
 
-            <View style={{ flex: 1 }}>
-              <Text style={styles.warningTitle}>Locking not confirmed</Text>
+                      pressed && {
+                        opacity: 0.8,
+                      },
+                    ]}
+                    onPress={turnOnBluetooth}
+                  >
+                    <Ionicons name="bluetooth" size={20} color="#FFFFFF" />
 
-              <Text style={styles.warningText}>
-                You left the car, but CarLock has not received lock confirmation
-                yet.
-              </Text>
-            </View>
-          </View>
-        )}
+                    <Text style={styles.bluetoothButtonText}>
+                      Turn on Bluetooth
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
 
-        {/* MANUAL LOCK */}
+              {/* NOTIFICATION WARNING */}
 
-        {carState === "UNCONFIRMED" && (
-          <Pressable
-            style={({ pressed }) => [
-              styles.lockButton,
+              {!notificationsEnabled && (
+                <View style={styles.notificationCard}>
+                  <View style={styles.notificationTop}>
+                    <View style={styles.notificationIcon}>
+                      <Ionicons
+                        name="notifications-off-outline"
+                        size={25}
+                        color="#FF5C1D"
+                      />
+                    </View>
 
-              pressed && {
-                opacity: 0.82,
-              },
-            ]}
-            onPress={confirmLocked}
-          >
-            <Ionicons name="lock-closed" size={20} color="#FFFFFF" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.notificationTitle}>
+                        Notifications are off
+                      </Text>
 
-            <Text style={styles.lockButtonText}>I locked the car</Text>
-          </Pressable>
-        )}
+                      <Text style={styles.notificationText}>
+                        Enable notifications so Locksora can remind you when
+                        locking has not been confirmed.
+                      </Text>
+                    </View>
+                  </View>
 
-        {/* ERROR */}
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.notificationButton,
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-      </View>
-    </View>
+                      pressed && {
+                        opacity: 0.8,
+                      },
+                    ]}
+                    onPress={requestNotificationPermission}
+                  >
+                    <Ionicons
+                      name="notifications-outline"
+                      size={20}
+                      color="#FFFFFF"
+                    />
+
+                    <Text style={styles.notificationButtonText}>
+                      Enable notifications
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+
+              {/* UNCONFIRMED */}
+
+              {carState === "UNCONFIRMED" && (
+                <View style={styles.warning}>
+                  <Ionicons
+                    name="alert-circle-outline"
+                    size={24}
+                    color="#FF5C1D"
+                  />
+
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.warningTitle}>
+                      Locking not confirmed
+                    </Text>
+
+                    <Text style={styles.warningText}>
+                      You left the car, but Locksora has not received lock
+                      confirmation yet.
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {/* MANUAL LOCK */}
+
+              {carState === "UNCONFIRMED" && (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.lockButton,
+
+                    pressed && {
+                      opacity: 0.82,
+                    },
+                  ]}
+                  onPress={confirmLocked}
+                >
+                  <Ionicons name="lock-closed" size={20} color="#FFFFFF" />
+
+                  <Text style={styles.lockButtonText}>I locked the car</Text>
+                </Pressable>
+              )}
+            </>
+          )}
+
+          {/* ERROR */}
+
+          {error || vehicleError ? (
+            <Text style={styles.error}>{error || vehicleError}</Text>
+          ) : null}
+        </View>
+      </ScrollView>
+      <LocksoraGuide
+        visible={guide.visible}
+        onClose={guide.close}
+        error={guide.error}
+      />
+    </>
   );
 }
 

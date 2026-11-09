@@ -1,5 +1,6 @@
 package expo.modules.carlockbluetooth
 
+import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothDevice
@@ -17,6 +18,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.os.bundleOf
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import expo.modules.kotlin.functions.Queues
 
 class CarlockBluetoothModule : Module() {
 
@@ -202,7 +204,8 @@ class CarlockBluetoothModule : Module() {
             Events(
                 "onCarConnectionChanged",
                 "onBluetoothStateChanged",
-                "onLockStateChanged"
+                "onLockStateChanged",
+                "onNfcEnrollmentFinished"
             )
 
             //
@@ -447,6 +450,26 @@ class CarlockBluetoothModule : Module() {
                 }
             }
 
+            // Restore one active profile atomically; keep the established selection reset policy.
+            AsyncFunction("activateVehicle") { name: String, address: String, nfcTagId: String? ->
+                require(name.isNotBlank() && address.isNotBlank()) { "A vehicle name and Bluetooth address are required." }
+                val context = requireNotNull(appContext.reactContext)
+                val prefs = context.getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
+                val changed = !address.equals(prefs.getString("selectedCarAddress", null), ignoreCase = true)
+                val editor = prefs.edit()
+                    .putString("selectedCarName", name)
+                    .putString("selectedCarAddress", address)
+                    .putString("nfcTagId", nfcTagId)
+                if (changed) {
+                    editor.putBoolean("connected", false)
+                        .putBoolean("locked", true)
+                        .putString("lastEvent", "NONE")
+                        .putLong("lastEventAt", 0L)
+                }
+                editor.apply()
+                if (changed) cancelLockReminder(context)
+            }
+
             AsyncFunction("getNfcTagId") {
                 appContext.reactContext?.getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
                     ?.getString("nfcTagId", null)
@@ -456,8 +479,17 @@ class CarlockBluetoothModule : Module() {
                 val activity = appContext.currentActivity ?: return@AsyncFunction false
                 val adapter = NfcAdapter.getDefaultAdapter(activity)
                 if (adapter == null || !adapter.isEnabled) return@AsyncFunction false
-                activity.startActivity(Intent(activity, CarlockNfcSetupActivity::class.java))
+                activity.startActivityForResult(Intent(activity, CarlockNfcSetupActivity::class.java), 4001)
                 true
+            }.runOnQueue(Queues.MAIN)
+
+            OnActivityResult { _, result ->
+                if (result.requestCode == 4001) {
+                    sendEvent("onNfcEnrollmentFinished", bundleOf(
+                        "success" to (result.resultCode == Activity.RESULT_OK),
+                        "address" to result.data?.getStringExtra("address")
+                    ))
+                }
             }
 
             OnCreate {

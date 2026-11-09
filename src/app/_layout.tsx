@@ -3,6 +3,7 @@ import * as SplashScreen from "expo-splash-screen";
 import { useColorScheme } from "react-native";
 
 import { AnimatedSplashOverlay } from "@/components/animated-icon";
+import { VehiclesProvider } from "@/state/vehicles";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -13,11 +14,13 @@ export default function RootLayout() {
     <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
       <AnimatedSplashOverlay />
 
-      <Stack
-        screenOptions={{
-          headerShown: false,
-        }}
-      />
+      <VehiclesProvider>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+          }}
+        />
+      </VehiclesProvider>
     </ThemeProvider>
   );
 }
