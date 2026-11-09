@@ -9,15 +9,20 @@ import android.nfc.Tag
 
 internal object CarlockLockConfirmation {
     fun confirm(context: Context) {
+        CarlockNfcDiagnostics.log(context, "confirmation.begin")
         context.getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
             .edit().putBoolean("locked", true).apply()
+        CarlockNfcDiagnostics.log(context, "confirmation.preferences.applied", "diskWrite=async")
         cancelReminder(context)
+        CarlockNfcDiagnostics.log(context, "confirmation.complete", "notificationId=1001 cancelled=true")
     }
 
     fun confirmTag(context: Context, tag: Tag): Boolean {
         val prefs = context.getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
         val configured = prefs.getString("nfcTagId", null)
-        if (configured.isNullOrBlank() || configured != tagId(tag)) return false
+        val matches = !configured.isNullOrBlank() && configured == tagId(tag)
+        CarlockNfcDiagnostics.log(context, "confirmation.tag.match", "matches=$matches")
+        if (!matches) return false
         confirm(context)
         return true
     }

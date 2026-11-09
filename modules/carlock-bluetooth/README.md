@@ -30,6 +30,9 @@ Android may show an app chooser. NFC must be enabled and the phone generally
 must be unlocked; force-stop and device-specific NFC restrictions still apply.
 Notifications also require Android notification permission.
 
+For lock-screen findings, diagnostic stages, and adb capture instructions, see
+[NFC_DIAGNOSTICS.md](NFC_DIAGNOSTICS.md).
+
 ## Device verification
 
 1. Select the car and enroll tag A. Verify enrollment leaves the lock state alone.

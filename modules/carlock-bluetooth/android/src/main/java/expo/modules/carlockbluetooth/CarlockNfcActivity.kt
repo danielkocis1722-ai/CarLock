@@ -11,11 +11,13 @@ import android.os.Bundle
 class CarlockNfcActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CarlockNfcDiagnostics.intent(this, "dispatch.activity.onCreate", intent)
         handleTag(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        CarlockNfcDiagnostics.intent(this, "dispatch.activity.onNewIntent", intent)
         handleTag(intent)
     }
 
@@ -31,8 +33,27 @@ class CarlockNfcActivity : Activity() {
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
             }
-            if (tag != null) CarlockLockConfirmation.confirmTag(this, tag)
+            if (tag != null) {
+                CarlockNfcDiagnostics.tag(this, "dispatch.tag.parsed", tag)
+                val confirmed = CarlockLockConfirmation.confirmTag(this, tag)
+                CarlockNfcDiagnostics.log(this, "dispatch.confirmation.result", "confirmed=$confirmed")
+            } else {
+                CarlockNfcDiagnostics.log(this, "dispatch.tag.missing", "confirmationSkipped=true")
+            }
+        } else {
+            CarlockNfcDiagnostics.log(this, "dispatch.action.ignored", "action=${intent.action}")
         }
+        CarlockNfcDiagnostics.log(this, "dispatch.activity.finish")
         finish()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        CarlockNfcDiagnostics.log(this, "dispatch.activity.onResume")
+    }
+
+    override fun onDestroy() {
+        CarlockNfcDiagnostics.log(this, "dispatch.activity.onDestroy")
+        super.onDestroy()
     }
 }

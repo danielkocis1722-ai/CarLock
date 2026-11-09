@@ -22,29 +22,47 @@ class CarlockBluetoothModule : Module() {
 
     private var receiverRegistered = false
     private var observedPrefs: SharedPreferences? = null
+    private var diagnosticReceiver: BroadcastReceiver? = null
     private val lockStateListener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
         if (key == "locked") {
+            appContext.reactContext?.let {
+                CarlockNfcDiagnostics.log(it, "bridge.onLockStateChanged", "locked=${prefs.getBoolean("locked", true)}")
+            }
             sendEvent("onLockStateChanged", bundleOf("locked" to prefs.getBoolean("locked", true)))
         }
     }
 
     private fun enableNfcReader() {
-        val activity = appContext.currentActivity ?: return
+        val activity = appContext.currentActivity ?: run {
+            appContext.reactContext?.let { CarlockNfcDiagnostics.log(it, "reader.enable.noActivity") }
+            return
+        }
         activity.runOnUiThread {
+            CarlockNfcDiagnostics.log(activity, "reader.enable.request", "activity=${activity.javaClass.simpleName}")
             val prefs = activity.getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
-            if (prefs.getString("nfcTagId", null).isNullOrBlank()) return@runOnUiThread
+            if (prefs.getString("nfcTagId", null).isNullOrBlank()) {
+                CarlockNfcDiagnostics.log(activity, "reader.enable.skipped", "reason=noConfiguredTag")
+                return@runOnUiThread
+            }
             NfcAdapter.getDefaultAdapter(activity)?.enableReaderMode(activity, { tag ->
-                activity.runOnUiThread { CarlockLockConfirmation.confirmTag(activity, tag) }
+                CarlockNfcDiagnostics.tag(activity, "reader.callback", tag)
+                activity.runOnUiThread {
+                    val confirmed = CarlockLockConfirmation.confirmTag(activity, tag)
+                    CarlockNfcDiagnostics.log(activity, "reader.confirmation.result", "confirmed=$confirmed")
+                }
             }, NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B or
                 NfcAdapter.FLAG_READER_NFC_F or NfcAdapter.FLAG_READER_NFC_V or
                 NfcAdapter.FLAG_READER_NFC_BARCODE or NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK, null)
+            CarlockNfcDiagnostics.log(activity, "reader.enable.returned", "doesNotProvePolling=true")
         }
     }
 
     private fun disableNfcReader() {
         val activity = appContext.currentActivity ?: return
         activity.runOnUiThread {
+            CarlockNfcDiagnostics.log(activity, "reader.disable.request", "activity=${activity.javaClass.simpleName}")
             NfcAdapter.getDefaultAdapter(activity)?.disableReaderMode(activity)
+            CarlockNfcDiagnostics.log(activity, "reader.disable.returned")
         }
     }
 
@@ -461,13 +479,27 @@ class CarlockBluetoothModule : Module() {
             }
 
             OnCreate {
+                appContext.reactContext?.let {
+                    CarlockNfcDiagnostics.log(it, "module.onCreate")
+                    diagnosticReceiver = CarlockNfcDiagnostics.observeScreen(it)
+                }
                 observedPrefs = appContext.reactContext
                     ?.getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
                 observedPrefs?.registerOnSharedPreferenceChangeListener(lockStateListener)
             }
 
-            OnActivityEntersForeground { enableNfcReader() }
-            OnActivityEntersBackground { disableNfcReader() }
+            OnActivityEntersForeground {
+                appContext.reactContext?.let { CarlockNfcDiagnostics.log(it, "module.activity.foreground") }
+                enableNfcReader()
+            }
+            OnActivityEntersBackground {
+                appContext.reactContext?.let { CarlockNfcDiagnostics.log(it, "module.activity.background") }
+                disableNfcReader()
+            }
+
+            OnNewIntent { intent ->
+                appContext.reactContext?.let { CarlockNfcDiagnostics.intent(it, "module.activity.onNewIntent", intent) }
+            }
 
             AsyncFunction(
                 "isCarConnected"
@@ -488,6 +520,17 @@ class CarlockBluetoothModule : Module() {
             }
 
             OnDestroy {
+                appContext.reactContext?.let { context ->
+                    CarlockNfcDiagnostics.log(context, "module.onDestroy")
+                    diagnosticReceiver?.let {
+                        try {
+                            context.unregisterReceiver(it)
+                        } catch (_: IllegalArgumentException) {
+                            CarlockNfcDiagnostics.log(context, "device.observer.alreadyUnregistered")
+                        }
+                    }
+                }
+                diagnosticReceiver = null
                 disableNfcReader()
                 observedPrefs?.unregisterOnSharedPreferenceChangeListener(lockStateListener)
                 observedPrefs = null
