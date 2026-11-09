@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.NFC" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
+
     <uses-permission
         android:name="android.permission.BLUETOOTH_CONNECT" />
 
@@ -7,6 +10,27 @@
         android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application>
+
+        <activity
+            android:name=".CarlockNfcSetupActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".CarlockNfcActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.nfc.action.TECH_DISCOVERED" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data android:name="android.nfc.action.TECH_DISCOVERED"
+                android:resource="@xml/carlock_nfc_techs" />
+            <intent-filter>
+                <action android:name="android.nfc.action.TAG_DISCOVERED" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
 
         <receiver
             android:name=".CarlockBluetoothReceiver"

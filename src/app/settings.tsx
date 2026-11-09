@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import {
   PermissionsAndroid,
+  AppState,
   Platform,
   Pressable,
   ScrollView,
@@ -37,9 +38,30 @@ export default function SettingsScreen() {
 
   const [error, setError] = useState("");
 
+  const [nfcTagId, setNfcTagId] = useState<string | null>(null);
+
   useEffect(() => {
     loadSettings();
+
+    if (Platform.OS !== "android") return;
+    const refreshTag = () => {
+      CarlockBluetoothModule.getNfcTagId().then(setNfcTagId).catch(console.error);
+    };
+    refreshTag();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") refreshTag();
+    });
+    return () => subscription.remove();
   }, []);
+
+  const configureNfcTag = async () => {
+    try {
+      const opened = await CarlockBluetoothModule.configureNfcTag();
+      setError(opened ? "" : "Enable NFC on a supported Android phone first.");
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    }
+  };
 
   const requestPermissions = async () => {
     if (Platform.OS !== "android") {
@@ -124,6 +146,25 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
+        {Platform.OS === "android" && (
+          <View>
+            <Text style={styles.sectionLabel}>NFC LOCK CONFIRMATION</Text>
+            <Text style={styles.description}>
+              {nfcTagId ? "Lock confirmation tag configured." : "No lock confirmation tag configured."}
+            </Text>
+            <Pressable
+              style={styles.currentCard}
+              disabled={!selectedCar.address}
+              onPress={configureNfcTag}
+            >
+              <Text style={styles.currentName}>
+                {selectedCar.address
+                  ? (nfcTagId ? "Change NFC tag" : "Configure NFC tag")
+                  : "Select a car before configuring NFC"}
+              </Text>
+            </Pressable>
+          </View>
+        )}
         <Text style={styles.sectionLabel}>CURRENT CAR</Text>
 
         <View style={styles.currentCard}>

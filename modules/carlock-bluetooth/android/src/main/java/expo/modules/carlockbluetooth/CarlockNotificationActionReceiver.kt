@@ -1,6 +1,5 @@
 package expo.modules.carlockbluetooth
 
-import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -12,12 +11,6 @@ class CarlockNotificationActionReceiver : BroadcastReceiver() {
         context: Context,
         intent: Intent
     ) {
-        val prefs =
-            context.getSharedPreferences(
-                "carlock_state",
-                Context.MODE_PRIVATE
-            )
-
         when (intent.action) {
 
             ACTION_LOCKED -> {
@@ -25,21 +18,13 @@ class CarlockNotificationActionReceiver : BroadcastReceiver() {
                 // Používateľ potvrdil,
                 // že auto zamkol.
                 //
-                prefs.edit()
-                    .putBoolean(
-                        "locked",
-                        true
-                    )
-                    .apply()
+                CarlockLockConfirmation.confirm(context)
 
                 Log.d(
                     "CarLockBT",
                     "Notification action: I LOCKED IT"
                 )
 
-                dismissNotification(
-                    context
-                )
             }
 
             ACTION_KEEP_UNLOCKED -> {
@@ -52,24 +37,9 @@ class CarlockNotificationActionReceiver : BroadcastReceiver() {
                     "Notification action: KEEP UNLOCKED"
                 )
 
-                dismissNotification(
-                    context
-                )
+                CarlockLockConfirmation.cancelReminder(context)
             }
         }
-    }
-
-    private fun dismissNotification(
-        context: Context
-    ) {
-        val manager =
-            context.getSystemService(
-                Context.NOTIFICATION_SERVICE
-            ) as NotificationManager
-
-        manager.cancel(
-            CarlockReminderReceiver.NOTIFICATION_ID
-        )
     }
 
     companion object {

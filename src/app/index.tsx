@@ -206,8 +206,7 @@ export default function HomeScreen() {
   };
 
   //
-  // DOČASNÉ MANUÁLNE LOCKED.
-  // NESKÔR TO BUDE ROBIŤ NFC.
+  // MANUAL LOCK CONFIRMATION
   //
   const confirmLocked = async () => {
     setIsLocked(true);
@@ -271,6 +270,11 @@ export default function HomeScreen() {
       },
     );
 
+    const lockSubscription = CarlockBluetoothModule.addListener(
+      "onLockStateChanged",
+      (event) => setIsLocked(event.locked),
+    );
+
     //
     // BLUETOOTH TELEFÓNU
     // ON / OFF
@@ -327,6 +331,8 @@ export default function HomeScreen() {
 
     return () => {
       carSubscription.remove();
+
+      lockSubscription.remove();
 
       bluetoothSubscription.remove();
 

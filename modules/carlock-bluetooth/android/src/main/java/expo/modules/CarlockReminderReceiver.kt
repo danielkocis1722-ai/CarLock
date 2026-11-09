@@ -16,6 +16,10 @@ class CarlockReminderReceiver : BroadcastReceiver() {
         context: Context,
         intent: Intent
     ) {
+        show(context)
+    }
+
+    fun show(context: Context) {
         val prefs =
             context.getSharedPreferences(
                 "carlock_state",
@@ -143,6 +147,7 @@ class CarlockReminderReceiver : BroadcastReceiver() {
                     NotificationCompat.PRIORITY_HIGH
                 )
                 .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
 
                 //
                 // BUTTON 1

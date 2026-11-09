@@ -1,7 +1,5 @@
 package expo.modules.carlockbluetooth
 
-import android.app.AlarmManager
-import android.app.PendingIntent
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothDevice
@@ -128,9 +126,7 @@ class CarlockBluetoothReceiver :
                     )
                     .apply()
 
-                cancelLockReminder(
-                    context
-                )
+                CarlockLockConfirmation.cancelReminder(context)
 
                 Log.d(
                     "CarLockBT",
@@ -155,13 +151,12 @@ class CarlockBluetoothReceiver :
                     )
                     .apply()
 
-                scheduleLockReminder(
-                    context
-                )
+                CarlockLockConfirmation.cancelPendingReminder(context)
+                CarlockReminderReceiver().show(context)
 
                 Log.d(
                     "CarLockBT",
-                    "BACKGROUND SELECTED CAR DISCONNECTED -> reminder scheduled"
+                    "BACKGROUND SELECTED CAR DISCONNECTED -> reminder shown"
                 )
             }
 
@@ -197,9 +192,7 @@ class CarlockBluetoothReceiver :
                         )
                         .apply()
 
-                    cancelLockReminder(
-                        context
-                    )
+                    CarlockLockConfirmation.cancelReminder(context)
                 }
 
                 if (
@@ -221,10 +214,8 @@ class CarlockBluetoothReceiver :
                         )
                         .apply()
 
-                    //
-                    // Reminder tu nedávame.
-                    // Čakáme na ACL disconnect.
-                    //
+                    CarlockLockConfirmation.cancelPendingReminder(context)
+                    CarlockReminderReceiver().show(context)
                 }
             }
         }
@@ -282,81 +273,4 @@ class CarlockBluetoothReceiver :
             ) == true
     }
 
-    private fun scheduleLockReminder(
-        context: Context
-    ) {
-        val alarmManager =
-            context.getSystemService(
-                Context.ALARM_SERVICE
-            ) as AlarmManager
-
-        val intent =
-            Intent(
-                context,
-                CarlockReminderReceiver::class.java
-            )
-
-        val pendingIntent =
-            PendingIntent.getBroadcast(
-                context,
-                REMINDER_REQUEST_CODE,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or
-                        PendingIntent.FLAG_IMMUTABLE
-            )
-
-        val triggerAt =
-            System.currentTimeMillis() +
-                    REMINDER_DELAY_MS
-
-        alarmManager.setAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            triggerAt,
-            pendingIntent
-        )
-
-        Log.d(
-            "CarLockBT",
-            "Lock reminder scheduled for 15 seconds"
-        )
-    }
-
-    private fun cancelLockReminder(
-        context: Context
-    ) {
-        val alarmManager =
-            context.getSystemService(
-                Context.ALARM_SERVICE
-            ) as AlarmManager
-
-        val intent =
-            Intent(
-                context,
-                CarlockReminderReceiver::class.java
-            )
-
-        val pendingIntent =
-            PendingIntent.getBroadcast(
-                context,
-                REMINDER_REQUEST_CODE,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or
-                        PendingIntent.FLAG_IMMUTABLE
-            )
-
-        alarmManager.cancel(
-            pendingIntent
-        )
-    }
-
-    companion object {
-
-        private const val
-                REMINDER_REQUEST_CODE =
-            2001
-
-        private const val
-                REMINDER_DELAY_MS =
-            15_000L
-    }
 }

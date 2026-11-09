@@ -1,7 +1,5 @@
 package expo.modules.carlockbluetooth
 
-import android.app.AlarmManager
-import android.app.PendingIntent
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothDevice
@@ -11,6 +9,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
+import android.nfc.NfcAdapter
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -21,6 +21,32 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class CarlockBluetoothModule : Module() {
 
     private var receiverRegistered = false
+    private var observedPrefs: SharedPreferences? = null
+    private val lockStateListener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+        if (key == "locked") {
+            sendEvent("onLockStateChanged", bundleOf("locked" to prefs.getBoolean("locked", true)))
+        }
+    }
+
+    private fun enableNfcReader() {
+        val activity = appContext.currentActivity ?: return
+        activity.runOnUiThread {
+            val prefs = activity.getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
+            if (prefs.getString("nfcTagId", null).isNullOrBlank()) return@runOnUiThread
+            NfcAdapter.getDefaultAdapter(activity)?.enableReaderMode(activity, { tag ->
+                activity.runOnUiThread { CarlockLockConfirmation.confirmTag(activity, tag) }
+            }, NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B or
+                NfcAdapter.FLAG_READER_NFC_F or NfcAdapter.FLAG_READER_NFC_V or
+                NfcAdapter.FLAG_READER_NFC_BARCODE or NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK, null)
+        }
+    }
+
+    private fun disableNfcReader() {
+        val activity = appContext.currentActivity ?: return
+        activity.runOnUiThread {
+            NfcAdapter.getDefaultAdapter(activity)?.disableReaderMode(activity)
+        }
+    }
 
     private val bluetoothReceiver =
         object : BroadcastReceiver() {
@@ -175,7 +201,8 @@ class CarlockBluetoothModule : Module() {
 
             Events(
                 "onCarConnectionChanged",
-                "onBluetoothStateChanged"
+                "onBluetoothStateChanged",
+                "onLockStateChanged"
             )
 
             //
@@ -235,6 +262,7 @@ class CarlockBluetoothModule : Module() {
                         Context.MODE_PRIVATE
                     )
                     .edit()
+                    .remove("nfcTagId")
                     .putString(
                         "selectedCarName",
                         name
@@ -401,7 +429,7 @@ class CarlockBluetoothModule : Module() {
             }
 
             //
-            // MANUAL LOCK / NFC LATER
+            // MANUAL LOCK CONFIRMATION
             //
             AsyncFunction(
                 "setLocked"
@@ -411,31 +439,35 @@ class CarlockBluetoothModule : Module() {
                     appContext.reactContext
                         ?: return@AsyncFunction
 
-                context
-                    .getSharedPreferences(
-                        "carlock_state",
-                        Context.MODE_PRIVATE
-                    )
-                    .edit()
-                    .putBoolean(
-                        "locked",
-                        locked
-                    )
-                    .apply()
-
-                if (
-                    locked
-                ) {
-                    cancelLockReminder(
-                        context
-                    )
+                if (locked) {
+                    CarlockLockConfirmation.confirm(context)
+                } else {
+                    context.getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
+                        .edit().putBoolean("locked", false).apply()
                 }
-
-                Log.d(
-                    "CarLockBT",
-                    "Manual locked state=$locked"
-                )
             }
+
+            AsyncFunction("getNfcTagId") {
+                appContext.reactContext?.getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
+                    ?.getString("nfcTagId", null)
+            }
+
+            AsyncFunction("configureNfcTag") {
+                val activity = appContext.currentActivity ?: return@AsyncFunction false
+                val adapter = NfcAdapter.getDefaultAdapter(activity)
+                if (adapter == null || !adapter.isEnabled) return@AsyncFunction false
+                activity.startActivity(Intent(activity, CarlockNfcSetupActivity::class.java))
+                true
+            }
+
+            OnCreate {
+                observedPrefs = appContext.reactContext
+                    ?.getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
+                observedPrefs?.registerOnSharedPreferenceChangeListener(lockStateListener)
+            }
+
+            OnActivityEntersForeground { enableNfcReader() }
+            OnActivityEntersBackground { disableNfcReader() }
 
             AsyncFunction(
                 "isCarConnected"
@@ -456,6 +488,9 @@ class CarlockBluetoothModule : Module() {
             }
 
             OnDestroy {
+                disableNfcReader()
+                observedPrefs?.unregisterOnSharedPreferenceChangeListener(lockStateListener)
+                observedPrefs = null
                 unregisterReceiver()
             }
         }
@@ -563,6 +598,8 @@ class CarlockBluetoothModule : Module() {
             ContextCompat.RECEIVER_EXPORTED
         )
 
+        enableNfcReader()
+
         receiverRegistered =
             true
     }
@@ -653,6 +690,12 @@ class CarlockBluetoothModule : Module() {
         }
 
         editor.apply()
+        if (connected) {
+            CarlockLockConfirmation.cancelReminder(context)
+        } else {
+            CarlockLockConfirmation.cancelPendingReminder(context)
+            CarlockReminderReceiver().show(context)
+        }
     }
 
     private fun getBluetoothDevice(
@@ -693,29 +736,7 @@ class CarlockBluetoothModule : Module() {
     private fun cancelLockReminder(
         context: Context
     ) {
-        val alarmManager =
-            context.getSystemService(
-                Context.ALARM_SERVICE
-            ) as AlarmManager
-
-        val intent =
-            Intent(
-                context,
-                CarlockReminderReceiver::class.java
-            )
-
-        val pendingIntent =
-            PendingIntent.getBroadcast(
-                context,
-                2001,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or
-                        PendingIntent.FLAG_IMMUTABLE
-            )
-
-        alarmManager.cancel(
-            pendingIntent
-        )
+        CarlockLockConfirmation.cancelReminder(context)
     }
 
     private fun isSelectedCarConnected(): Boolean {
