@@ -9,268 +9,37 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.util.Log
 
-class CarlockBluetoothReceiver :
-    BroadcastReceiver() {
-
-    override fun onReceive(
-        context: Context,
-        intent: Intent
-    ) {
-
-        if (
-            intent.action ==
-            BluetoothAdapter.ACTION_STATE_CHANGED
-        ) {
-            val state =
-                intent.getIntExtra(
-                    BluetoothAdapter.EXTRA_STATE,
-                    BluetoothAdapter.ERROR
-                )
-
-            if (
-                state ==
-                BluetoothAdapter.STATE_OFF
-            ) {
-                context
-                    .getSharedPreferences(
-                        "carlock_state",
-                        Context.MODE_PRIVATE
-                    )
-                    .edit()
-                    .putBoolean(
-                        "connected",
-                        false
-                    )
-                    .apply()
+/** Shared by manifest delivery and the live module; duplicate transitions are idempotent. */
+class CarlockBluetoothReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+            val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            if (state == BluetoothAdapter.STATE_OFF || state == BluetoothAdapter.STATE_ON) {
+                CarlockVehicleStore.adapterState(context, state == BluetoothAdapter.STATE_ON)
             }
-
             return
         }
-
-        val device =
-            if (
-                Build.VERSION.SDK_INT >=
-                Build.VERSION_CODES.TIRAMISU
-            ) {
-                intent.getParcelableExtra(
-                    BluetoothDevice.EXTRA_DEVICE,
-                    BluetoothDevice::class.java
-                )
-            } else {
-                @Suppress(
-                    "DEPRECATION"
-                )
-                intent.getParcelableExtra(
-                    BluetoothDevice.EXTRA_DEVICE
-                )
-            }
-
-        val name =
-            try {
-                device?.name
-            } catch (
-                _: SecurityException
-            ) {
-                null
-            }
-
-        Log.d(
-            "CarLockBT",
-            "BACKGROUND event=${intent.action}, device=$name, address=${device?.address}"
-        )
-
-        //
-        // NOVÉ:
-        // filtrujeme selected car
-        //
-        if (
-            !isSelectedCar(
-                context,
-                device,
-                name
-            )
-        ) {
-            return
-        }
-
-        val prefs =
-            context.getSharedPreferences(
-                "carlock_state",
-                Context.MODE_PRIVATE
-            )
-
-        when (
-            intent.action
-        ) {
-
-            BluetoothDevice.ACTION_ACL_CONNECTED -> {
-
-                prefs.edit()
-                    .putBoolean(
-                        "connected",
-                        true
-                    )
-                    .putBoolean(
-                        "locked",
-                        false
-                    )
-                    .putString(
-                        "lastEvent",
-                        "CONNECTED"
-                    )
-                    .putLong(
-                        "lastEventAt",
-                        System.currentTimeMillis()
-                    )
-                    .apply()
-
-                CarlockLockConfirmation.cancelReminder(context)
-
-                Log.d(
-                    "CarLockBT",
-                    "BACKGROUND SELECTED CAR CONNECTED"
-                )
-            }
-
-            BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-
-                prefs.edit()
-                    .putBoolean(
-                        "connected",
-                        false
-                    )
-                    .putString(
-                        "lastEvent",
-                        "DISCONNECTED"
-                    )
-                    .putLong(
-                        "lastEventAt",
-                        System.currentTimeMillis()
-                    )
-                    .apply()
-
-                CarlockLockConfirmation.cancelPendingReminder(context)
-                CarlockReminderReceiver().show(context)
-
-                Log.d(
-                    "CarLockBT",
-                    "BACKGROUND SELECTED CAR DISCONNECTED -> reminder shown"
-                )
-            }
-
+        val connected = when (intent.action) {
+            BluetoothDevice.ACTION_ACL_CONNECTED -> true
+            BluetoothDevice.ACTION_ACL_DISCONNECTED -> false
             BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
-            BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED -> {
-
-                val state =
-                    intent.getIntExtra(
-                        BluetoothProfile.EXTRA_STATE,
-                        BluetoothProfile.STATE_DISCONNECTED
-                    )
-
-                if (
-                    state ==
-                    BluetoothProfile.STATE_CONNECTED
-                ) {
-                    prefs.edit()
-                        .putBoolean(
-                            "connected",
-                            true
-                        )
-                        .putBoolean(
-                            "locked",
-                            false
-                        )
-                        .putString(
-                            "lastEvent",
-                            "CONNECTED"
-                        )
-                        .putLong(
-                            "lastEventAt",
-                            System.currentTimeMillis()
-                        )
-                        .apply()
-
-                    CarlockLockConfirmation.cancelReminder(context)
-                }
-
-                if (
-                    state ==
-                    BluetoothProfile.STATE_DISCONNECTED
-                ) {
-                    prefs.edit()
-                        .putBoolean(
-                            "connected",
-                            false
-                        )
-                        .putString(
-                            "lastEvent",
-                            "DISCONNECTED"
-                        )
-                        .putLong(
-                            "lastEventAt",
-                            System.currentTimeMillis()
-                        )
-                        .apply()
-
-                    CarlockLockConfirmation.cancelPendingReminder(context)
-                    CarlockReminderReceiver().show(context)
-                }
+            BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED -> when (
+                intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
+            ) {
+                BluetoothProfile.STATE_CONNECTED -> true
+                BluetoothProfile.STATE_DISCONNECTED -> false
+                else -> return
             }
+            else -> return
         }
-    }
-
-    private fun isSelectedCar(
-        context: Context,
-        device: BluetoothDevice?,
-        deviceName: String?
-    ): Boolean {
-
-        val prefs =
-            context.getSharedPreferences(
-                "carlock_state",
-                Context.MODE_PRIVATE
-            )
-
-        val selectedAddress =
-            prefs.getString(
-                "selectedCarAddress",
-                null
-            )
-
-        val selectedName =
-            prefs.getString(
-                "selectedCarName",
-                null
-            )
-
-        if (
-            !selectedAddress.isNullOrBlank()
-        ) {
-            return device
-                ?.address
-                ?.equals(
-                    selectedAddress,
-                    ignoreCase = true
-                ) == true
+        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
         }
-
-        //
-        // Migration fallback:
-        // kým si nič nevybral,
-        // sleduj CITROEN.
-        //
-        val nameToMatch =
-            selectedName
-                ?: "CITROEN"
-
-        return deviceName
-            ?.trim()
-            ?.equals(
-                nameToMatch.trim(),
-                ignoreCase = true
-            ) == true
+        val address = try { device?.address } catch (_: SecurityException) { null } ?: return
+        CarlockVehicleStore.bluetooth(context, address, connected)
     }
-
 }

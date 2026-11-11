@@ -17,14 +17,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import RNBluetoothClassic from "react-native-bluetooth-classic";
 import CarlockBluetoothModule from "../../modules/carlock-bluetooth/src/CarlockBluetoothModule";
 import { useVehicles } from "@/state/vehicles";
-import type { Vehicle } from "@/data/vehicle-store";
+import type { Vehicle, VehicleDraft } from "@/data/vehicle-store";
 
 type BluetoothDevice = { name?: string | null; address: string };
 const message = (error: unknown) =>
   error instanceof Error
     ? error.message
     : "Something went wrong. Please try again.";
-
 function Action({
   title,
   onPress,
@@ -58,12 +57,12 @@ function Action({
 export default function SettingsScreen() {
   const router = useRouter();
   const profiles = useVehicles();
-  const [editor, setEditor] = useState<Vehicle | null>(null);
+  const [editor, setEditor] = useState<VehicleDraft | null>(null);
   const [devices, setDevices] = useState<BluetoothDevice[]>([]);
   const [loadingDevices, setLoadingDevices] = useState(false);
   const [error, setError] = useState("");
   const [editorError, setEditorError] = useState("");
-  const [nfcTarget, setNfcTarget] = useState<Vehicle | null>(null);
+  const [enrollmentPrompt, setEnrollmentPrompt] = useState(false);
   const [startingNfc, setStartingNfc] = useState(false);
 
   const loadDevices = async () => {
@@ -83,34 +82,41 @@ export default function SettingsScreen() {
           )
         ) {
           throw new Error(
-            "Allow Nearby devices permission in Android Settings to choose your vehicle.",
+            "Allow Nearby devices permission in Android Settings to choose your vehicle's Bluetooth device.",
           );
         }
       }
-      const bonded = await RNBluetoothClassic.getBondedDevices();
-      setDevices(bonded);
+      setDevices(await RNBluetoothClassic.getBondedDevices());
     } catch (err) {
       setEditorError(message(err));
     } finally {
       setLoadingDevices(false);
     }
   };
-
   const openEditor = (vehicle?: Vehicle) => {
     setError("");
     setEditorError("");
     setDevices([]);
     setEditor(
       vehicle
-        ? { ...vehicle }
+        ? {
+            id: vehicle.id,
+            name: vehicle.name,
+            bluetoothAddress: vehicle.bluetoothAddress,
+            bluetoothName: vehicle.bluetoothName,
+          }
         : {
-            id: `vehicle-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`,
+            id:
+              "vehicle-" +
+              Date.now().toString(36) +
+              "-" +
+              Math.random().toString(36).slice(2, 9),
             name: "",
+            bluetoothAddress: "",
           },
     );
     loadDevices();
   };
-
   const saveVehicle = async () => {
     if (!editor) return;
     try {
@@ -121,25 +127,10 @@ export default function SettingsScreen() {
       setEditorError(message(err));
     }
   };
-
-  const activate = async (vehicle: Vehicle) => {
-    setError("");
-    try {
-      await profiles.activate(vehicle.id);
-    } catch (err) {
-      setError(message(err));
-    }
-  };
-
-  const deleteVehicle = (vehicle: Vehicle) => {
-    const replacement = profiles.vehicles.find(
-      (item) => item.id !== vehicle.id && item.bluetoothAddress,
-    );
+  const deleteVehicle = (vehicle: Vehicle) =>
     Alert.alert(
-      `Delete ${vehicle.name}?`,
-      profiles.activeVehicleId === vehicle.id
-        ? `${replacement?.name ?? "Another vehicle"} will become active. This vehicle's saved NFC tag will also be removed.`
-        : "This removes the saved vehicle and its NFC tag from Locksora.",
+      "Delete " + vehicle.name + "?",
+      "This removes the vehicle and its reminder. Your lock confirmation NFC tags will stay configured.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -156,12 +147,10 @@ export default function SettingsScreen() {
         },
       ],
     );
-  };
-
-  const removeTag = (vehicle: Vehicle) =>
+  const removeTag = (tagId: string, label: string) =>
     Alert.alert(
-      `Remove NFC tag for ${vehicle.name}?`,
-      "You can configure another tag at any time. This does not change the lock state.",
+      "Remove " + label + "?",
+      "This tag will no longer confirm locking. Vehicle lock states will not change.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -169,7 +158,7 @@ export default function SettingsScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              await profiles.removeTag(vehicle.id);
+              await profiles.removeTag(tagId);
               setError("");
             } catch (err) {
               setError(message(err));
@@ -178,21 +167,16 @@ export default function SettingsScreen() {
         },
       ],
     );
-
   const startEnrollment = async () => {
-    if (!nfcTarget) return;
     setStartingNfc(true);
     setError("");
     profiles.clearEnrollmentFeedback();
+    setEnrollmentPrompt(false);
     try {
-      if (nfcTarget.id !== profiles.activeVehicleId)
-        await profiles.activate(nfcTarget.id);
-      setNfcTarget(null);
-      if (!(await CarlockBluetoothModule.configureNfcTag())) {
+      if (!(await CarlockBluetoothModule.configureNfcTag()))
         throw new Error(
           "Enable NFC on a supported Android phone, then try again.",
         );
-      }
     } catch (err) {
       setError(message(err));
     } finally {
@@ -222,7 +206,8 @@ export default function SettingsScreen() {
       >
         <Text style={styles.eyebrow}>LOCKSORA · MY VEHICLES</Text>
         <Text style={styles.description}>
-          Keep your vehicles together. Only the active vehicle is monitored.
+          All configured vehicles are monitored. Locksora automatically follows
+          the vehicle you connect to or leave.
         </Text>
         <Action
           title="Add vehicle"
@@ -235,6 +220,114 @@ export default function SettingsScreen() {
             {error || profiles.error}
           </Text>
         ) : null}
+        {!profiles.ready ? (
+          <Text style={styles.description}>Loading vehicles…</Text>
+        ) : (
+          profiles.vehicles.length === 0 && (
+            <View style={styles.card}>
+              <Text style={styles.vehicleName}>Your first vehicle</Text>
+              <Text style={styles.description}>
+                Add its name and paired Bluetooth device. No manual vehicle
+                switching is needed.
+              </Text>
+            </View>
+          )
+        )}
+        {profiles.vehicles.map((vehicle) => (
+          <View key={vehicle.id} style={styles.card}>
+            <View style={styles.vehicleHeader}>
+              <View style={styles.carIcon}>
+                <Ionicons name="car-sport" size={26} color="#9FB7D9" />
+              </View>
+              <Text style={[styles.vehicleName, { flex: 1 }]}>
+                {vehicle.name}
+              </Text>
+            </View>
+            <View style={styles.detailRow}>
+              <Ionicons name="bluetooth" size={18} color="#9FB7D9" />
+              <Text style={styles.detail}>
+                {vehicle.bluetoothName ||
+                  vehicle.bluetoothAddress ||
+                  "No Bluetooth device configured"}
+              </Text>
+            </View>
+            <Text
+              style={[
+                styles.detail,
+                {
+                  color: vehicle.pending
+                    ? "#FF9273"
+                    : vehicle.locked
+                      ? "#5EDB8A"
+                      : "#EAF4FF",
+                },
+              ]}
+            >
+              {vehicle.pending
+                ? "Locking unconfirmed"
+                : vehicle.connected
+                  ? "In vehicle"
+                  : vehicle.locked
+                    ? "Locked"
+                    : "Disconnected"}
+            </Text>
+            <View style={styles.actions}>
+              <Action
+                title="Edit vehicle"
+                disabled={profiles.busy}
+                onPress={() => openEditor(vehicle)}
+              />
+              <Action
+                title="Delete vehicle"
+                danger
+                disabled={profiles.busy}
+                onPress={() => deleteVehicle(vehicle)}
+              />
+            </View>
+          </View>
+        ))}
+        <Text style={styles.eyebrow}>LOCK CONFIRMATION NFC TAGS</Text>
+        <Text style={styles.description}>
+          Configure one or more NFC tags for lock confirmation. Any configured
+          Locksora tag can confirm the vehicle you just left.
+        </Text>
+        <Text style={styles.small}>
+          When more than one vehicle is waiting, a scan confirms the most
+          recently disconnected vehicle. Scan again to confirm the next pending
+          vehicle.
+        </Text>
+        {profiles.configuredNfcTags.length === 0 && (
+          <Text style={styles.description}>No NFC tags configured.</Text>
+        )}
+        {profiles.configuredNfcTags.map((tagId, index) => (
+          <View key={tagId} style={styles.card}>
+            <View style={styles.detailRow}>
+              <Ionicons name="radio-outline" size={22} color="#5EDB8A" />
+              <Text style={styles.vehicleName}>Tag {index + 1}</Text>
+            </View>
+            <Action
+              title="Remove NFC tag"
+              danger
+              disabled={profiles.busy}
+              onPress={() => removeTag(tagId, "Tag " + (index + 1))}
+            />
+          </View>
+        ))}
+        <Action
+          title={
+            profiles.configuredNfcTags.length
+              ? "Add another NFC tag"
+              : "Add NFC tag"
+          }
+          primary
+          disabled={
+            profiles.busy ||
+            !profiles.ready ||
+            startingNfc ||
+            Platform.OS !== "android"
+          }
+          onPress={() => setEnrollmentPrompt(true)}
+        />
         {profiles.enrollmentFeedback && (
           <View style={styles.notice} accessibilityRole="alert">
             <Text style={styles.vehicleName}>
@@ -244,8 +337,8 @@ export default function SettingsScreen() {
             </Text>
             <Text style={styles.description}>
               {profiles.enrollmentFeedback.success
-                ? `Your tag belongs to ${profiles.enrollmentFeedback.vehicleName}. Enrollment did not change the lock state.`
-                : "Your previous NFC tag has not been replaced."}
+                ? "Any configured tag can confirm a pending vehicle. Enrollment did not change vehicle lock states."
+                : "Your configured NFC tags have not changed."}
             </Text>
             <Action
               title="Dismiss"
@@ -253,125 +346,12 @@ export default function SettingsScreen() {
             />
           </View>
         )}
-        {!profiles.ready ? (
-          <Text style={styles.description}>Loading vehicles…</Text>
-        ) : (
-          profiles.vehicles.length === 0 && (
-            <View style={styles.card}>
-              <Ionicons name="car-sport-outline" size={38} color="#9FB7D9" />
-              <Text style={styles.vehicleName}>Your first vehicle</Text>
-              <Text style={styles.description}>
-                Add a name and choose your car's paired Bluetooth device. Then
-                configure an NFC tag to confirm locking.
-              </Text>
-            </View>
-          )
-        )}
-        {profiles.vehicles.map((vehicle) => {
-          const active = vehicle.id === profiles.activeVehicleId;
-          return (
-            <View
-              key={vehicle.id}
-              style={[styles.card, active && styles.activeCard]}
-            >
-              <View style={styles.vehicleHeader}>
-                <View style={styles.carIcon}>
-                  <Ionicons
-                    name="car-sport"
-                    size={26}
-                    color={active ? "#5EDB8A" : "#9FB7D9"}
-                  />
-                </View>
-                <Text style={[styles.vehicleName, { flex: 1 }]}>
-                  {vehicle.name}
-                </Text>
-                {active && <Text style={styles.badge}>Active</Text>}
-              </View>
-              <View style={styles.detailRow}>
-                <Ionicons name="bluetooth" size={18} color="#9FB7D9" />
-                <Text style={styles.detail}>
-                  {vehicle.bluetoothName ||
-                    vehicle.bluetoothAddress ||
-                    "No Bluetooth device configured"}
-                </Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Ionicons
-                  name="radio-outline"
-                  size={18}
-                  color={vehicle.nfcTagId ? "#5EDB8A" : "#9FB7D9"}
-                />
-                <Text
-                  style={[
-                    styles.detail,
-                    vehicle.nfcTagId && { color: "#5EDB8A" },
-                  ]}
-                >
-                  {vehicle.nfcTagId
-                    ? "NFC tag configured"
-                    : "No NFC tag configured"}
-                </Text>
-              </View>
-              {!active && (
-                <Action
-                  title="Make active"
-                  primary
-                  disabled={profiles.busy || !vehicle.bluetoothAddress}
-                  onPress={() => activate(vehicle)}
-                />
-              )}
-              <View style={styles.actions}>
-                <Action
-                  title="Edit vehicle"
-                  disabled={profiles.busy}
-                  onPress={() => openEditor(vehicle)}
-                />
-                <Action
-                  title="Delete vehicle"
-                  danger
-                  disabled={profiles.busy || profiles.vehicles.length <= 1}
-                  onPress={() => deleteVehicle(vehicle)}
-                />
-              </View>
-              <View style={styles.divider} />
-              <Action
-                title={
-                  vehicle.nfcTagId ? "Reconfigure NFC tag" : "Configure NFC tag"
-                }
-                disabled={
-                  profiles.busy ||
-                  !vehicle.bluetoothAddress ||
-                  Platform.OS !== "android"
-                }
-                onPress={() => {
-                  setError("");
-                  setNfcTarget(vehicle);
-                }}
-              />
-              {vehicle.nfcTagId && (
-                <Action
-                  title="Remove NFC tag"
-                  danger
-                  disabled={profiles.busy}
-                  onPress={() => removeTag(vehicle)}
-                />
-              )}
-              {profiles.vehicles.length === 1 && (
-                <Text style={styles.small}>
-                  Keep at least one vehicle. Add another before deleting this
-                  one.
-                </Text>
-              )}
-            </View>
-          );
-        })}
-        <Text style={styles.eyebrow}>NFC CONFIRMATION</Text>
         <Text style={styles.description}>
-          Lock your vehicle first, then unlock your phone and scan its tag.
-          Passive NFC confirmation generally requires an unlocked Android phone.
+          Lock your vehicle first, then unlock your phone and scan any
+          configured tag. Passive NFC confirmation generally requires an
+          unlocked Android phone.
         </Text>
       </ScrollView>
-
       <Modal
         visible={editor !== null}
         animationType="slide"
@@ -420,7 +400,7 @@ export default function SettingsScreen() {
               </Text>
             )}
             <Text style={styles.small}>
-              Changing the Bluetooth device clears this vehicle's saved NFC tag.
+              Changing the Bluetooth device keeps your global NFC tags.
             </Text>
             {editorError ? (
               <Text style={styles.error} accessibilityRole="alert">
@@ -447,7 +427,10 @@ export default function SettingsScreen() {
                       disabled={profiles.busy}
                       accessibilityRole="radio"
                       accessibilityState={{ checked: selected }}
-                      style={[styles.device, selected && styles.activeCard]}
+                      style={[
+                        styles.device,
+                        selected && styles.selectedDeviceCard,
+                      ]}
                       onPress={() =>
                         setEditor(
                           (current) =>
@@ -507,48 +490,28 @@ export default function SettingsScreen() {
           </ScrollView>
         </SafeAreaView>
       </Modal>
-
       <Modal
-        visible={nfcTarget !== null}
+        visible={enrollmentPrompt}
         transparent
         animationType="fade"
-        onRequestClose={() => {
-          if (!startingNfc) setNfcTarget(null);
-        }}
+        onRequestClose={() => setEnrollmentPrompt(false)}
       >
         <View style={styles.scrim}>
           <View style={styles.prompt}>
             <Ionicons name="radio-outline" size={42} color="#5EDB8A" />
-            <Text style={styles.promptTitle}>
-              Configure NFC tag for {nfcTarget?.name}
-            </Text>
+            <Text style={styles.promptTitle}>Add a Locksora NFC tag</Text>
             <Text style={styles.description}>
-              Hold the back of your phone near the NFC tag on the next screen.
-              Enrollment does not confirm locking.
+              Hold the back of your phone near the tag on the next screen. The
+              tag can confirm any pending vehicle; enrollment does not confirm
+              locking.
             </Text>
-            {nfcTarget?.id !== profiles.activeVehicleId && (
-              <Text style={styles.description}>
-                This will make {nfcTarget?.name} the active vehicle before
-                setup.
-              </Text>
-            )}
             <Action
-              title={
-                startingNfc
-                  ? "Opening…"
-                  : nfcTarget?.id === profiles.activeVehicleId
-                    ? "Start scan"
-                    : "Make active & start scan"
-              }
+              title="Start scan"
               primary
               disabled={startingNfc || profiles.busy}
               onPress={startEnrollment}
             />
-            <Action
-              title="Cancel"
-              disabled={startingNfc}
-              onPress={() => setNfcTarget(null)}
-            />
+            <Action title="Cancel" onPress={() => setEnrollmentPrompt(false)} />
           </View>
         </View>
       </Modal>
@@ -598,7 +561,7 @@ const styles = StyleSheet.create({
     gap: 12,
     marginVertical: 4,
   },
-  activeCard: { borderColor: "#5EDB8A", borderWidth: 1 },
+  selectedDeviceCard: { borderColor: "#5EDB8A", borderWidth: 1 },
   vehicleHeader: { flexDirection: "row", alignItems: "center", gap: 12 },
   carIcon: {
     width: 46,

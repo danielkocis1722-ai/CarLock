@@ -26,17 +26,18 @@ export default function HomeScreen() {
   const router = useRouter();
 
   const {
-    activeVehicle,
-    activeVehicleId,
+    currentVehicle,
+    vehicles,
+    confirm,
     ready,
     refresh,
     error: vehicleError,
   } = useVehicles();
   const guide = useLocksoraGuide();
 
-  const [isConnected, setIsConnected] = useState(false);
+  const isConnected = currentVehicle?.connected ?? false;
 
-  const [isLocked, setIsLocked] = useState(true);
+  const isLocked = currentVehicle?.locked ?? true;
 
   const [bluetoothEnabled, setBluetoothEnabled] = useState(true);
 
@@ -128,9 +129,14 @@ export default function HomeScreen() {
   // MANUAL LOCK CONFIRMATION
   //
   const confirmLocked = async () => {
-    setIsLocked(true);
-
-    await CarlockBluetoothModule.setLocked(true);
+    if (!currentVehicle?.pending) return;
+    try {
+      await confirm(currentVehicle.id, currentVehicle.lastDisconnectAt);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Could not confirm locking.",
+      );
+    }
   };
 
   //
@@ -138,15 +144,7 @@ export default function HomeScreen() {
   //
   const refreshState = async () => {
     try {
-      const stored = await CarlockBluetoothModule.getStoredState();
-
-      const bluetoothOn = await CarlockBluetoothModule.isBluetoothEnabled();
-
-      setIsConnected(stored.connected);
-
-      setIsLocked(stored.locked);
-
-      setBluetoothEnabled(bluetoothOn);
+      setBluetoothEnabled(await CarlockBluetoothModule.isBluetoothEnabled());
     } catch (err) {
       console.log("State refresh error:", err);
     }
@@ -165,35 +163,13 @@ export default function HomeScreen() {
         .catch((err) => setError(err.message));
 
       checkNotificationPermission();
-    }, [refresh, activeVehicleId]),
+    }, [refresh]),
   );
 
   //
   // LIVE LISTENERY
   //
   useEffect(() => {
-    //
-    // CITROEN / VYBRANÉ AUTO
-    // CONNECT + DISCONNECT
-    //
-    const carSubscription = CarlockBluetoothModule.addListener(
-      "onCarConnectionChanged",
-      (event) => {
-        console.log("Car event:", event);
-
-        setIsConnected(event.connected);
-
-        if (event.connected) {
-          setIsLocked(false);
-        }
-      },
-    );
-
-    const lockSubscription = CarlockBluetoothModule.addListener(
-      "onLockStateChanged",
-      (event) => setIsLocked(event.locked),
-    );
-
     //
     // BLUETOOTH TELEFÓNU
     // ON / OFF
@@ -204,29 +180,6 @@ export default function HomeScreen() {
         console.log("Bluetooth event:", event);
 
         setBluetoothEnabled(event.enabled);
-
-        if (!event.enabled) {
-          //
-          // Bluetooth OFF:
-          // connection = false
-          //
-          // LOCKED / UNLOCKED
-          // nemeníme.
-          //
-          setIsConnected(false);
-
-          return;
-        }
-
-        //
-        // Bluetooth ON sám o sebe
-        // NESMIE znamenať UNLOCKED.
-        //
-        const stored = await CarlockBluetoothModule.getStoredState();
-
-        setIsConnected(stored.connected);
-
-        setIsLocked(stored.locked);
       },
     );
 
@@ -256,10 +209,6 @@ export default function HomeScreen() {
     );
 
     return () => {
-      carSubscription.remove();
-
-      lockSubscription.remove();
-
       bluetoothSubscription.remove();
 
       appStateSubscription.remove();
@@ -269,7 +218,7 @@ export default function HomeScreen() {
   //
   // NÁZOV AKTUÁLNEHO AUTA
   //
-  const carName = activeVehicle?.name ?? "No vehicle selected";
+  const carName = currentVehicle?.name ?? "Waiting for your vehicle";
 
   //
   // VZHĽAD 3 STAVOV
@@ -383,17 +332,21 @@ export default function HomeScreen() {
         <View style={styles.mainCard}>
           {!ready ? (
             <Text style={styles.stateSubtitle}>Loading your vehicle…</Text>
-          ) : !activeVehicle ? (
+          ) : !currentVehicle ? (
             <View style={{ alignItems: "center", gap: 18 }}>
               <Ionicons name="car-sport-outline" size={64} color="#9FB7D9" />
               <Text style={[styles.stateSubtitle, { marginBottom: 0 }]}>
-                Add your first vehicle to get started.
+                {vehicles.length
+                  ? "Your vehicles are ready. Connect to a configured vehicle to see its status."
+                  : "Add your first vehicle to get started."}
               </Text>
               <Pressable
                 style={styles.lockButton}
                 onPress={() => router.push("/settings")}
               >
-                <Text style={styles.lockButtonText}>Add vehicle</Text>
+                <Text style={styles.lockButtonText}>
+                  {vehicles.length ? "Manage vehicles" : "Add vehicle"}
+                </Text>
               </Pressable>
             </View>
           ) : (
@@ -568,7 +521,7 @@ export default function HomeScreen() {
 
               {/* UNCONFIRMED */}
 
-              {carState === "UNCONFIRMED" && (
+              {currentVehicle?.pending && (
                 <View style={styles.warning}>
                   <Ionicons
                     name="alert-circle-outline"

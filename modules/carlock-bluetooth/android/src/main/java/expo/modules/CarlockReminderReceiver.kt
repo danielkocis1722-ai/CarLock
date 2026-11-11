@@ -6,234 +6,57 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 
 class CarlockReminderReceiver : BroadcastReceiver() {
-
-    override fun onReceive(
-        context: Context,
-        intent: Intent
-    ) {
-        show(context)
+    override fun onReceive(context: Context, intent: Intent) {
+        // An old alarm cannot safely target the new fleet. New reminders are immediate.
+        CarlockLockConfirmation.cancelLegacyReminder(context)
     }
 
-    fun show(context: Context) {
-        val prefs =
-            context.getSharedPreferences(
-                "carlock_state",
-                Context.MODE_PRIVATE
-            )
-
-        val connected =
-            prefs.getBoolean(
-                "connected",
-                false
-            )
-
-        val locked =
-            prefs.getBoolean(
-                "locked",
-                true
-            )
-
-        val selectedCarName =
-            prefs.getString(
-                "selectedCarName",
-                "Your car"
-            ) ?: "Your car"
-
-        //
-        // Notification iba ak:
-        // - CITROEN nie je connected
-        // - locking stále nie je confirmed
-        //
-        if (
-            connected ||
-            locked
-        ) {
-            return
+    internal fun show(context: Context, vehicle: FleetVehicle) {
+        val reminder = vehicle.reminder() ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Lock confirmation reminders", NotificationManager.IMPORTANCE_HIGH))
         }
-
-        createNotificationChannel(
-            context
-        )
-
-        //
-        // Klik na samotnú notification
-        // otvorí CarLock appku.
-        //
-        val launchIntent =
-            context.packageManager
-                .getLaunchIntentForPackage(
-                    context.packageName
-                )
-
-        val contentIntent =
-            if (
-                launchIntent != null
-            ) {
-                PendingIntent.getActivity(
-                    context,
-                    0,
-                    launchIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or
-                            PendingIntent.FLAG_IMMUTABLE
-                )
-            } else {
-                null
+        fun action(action: String, requestCode: Int): PendingIntent {
+            val intent = Intent(context, CarlockNotificationActionReceiver::class.java).apply {
+                this.action = action
+                // Extras are not part of PendingIntent identity. Data separates vehicles AND trips.
+                data = Uri.Builder().scheme("locksora").authority("reminder")
+                    .appendPath(reminder.vehicleId).appendPath(reminder.disconnectAt.toString()).appendPath(action).build()
+                putExtra("vehicleId", reminder.vehicleId)
+                putExtra("disconnectAt", reminder.disconnectAt)
             }
-
-        //
-        // ACTION 1:
-        // I locked it
-        //
-        val lockedIntent =
-            Intent(
-                context,
-                CarlockNotificationActionReceiver::class.java
-            ).apply {
-                action =
-                    CarlockNotificationActionReceiver.ACTION_LOCKED
-            }
-
-        val lockedPendingIntent =
-            PendingIntent.getBroadcast(
-                context,
-                LOCKED_REQUEST_CODE,
-                lockedIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or
-                        PendingIntent.FLAG_IMMUTABLE
-            )
-
-        //
-        // ACTION 2:
-        // Keep unlocked
-        //
-        val keepUnlockedIntent =
-            Intent(
-                context,
-                CarlockNotificationActionReceiver::class.java
-            ).apply {
-                action =
-                    CarlockNotificationActionReceiver.ACTION_KEEP_UNLOCKED
-            }
-
-        val keepUnlockedPendingIntent =
-            PendingIntent.getBroadcast(
-                context,
-                KEEP_UNLOCKED_REQUEST_CODE,
-                keepUnlockedIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or
-                        PendingIntent.FLAG_IMMUTABLE
-            )
-
-        val notification =
-            NotificationCompat.Builder(
-                context,
-                CHANNEL_ID
-            )
-                .setSmallIcon(
-                    android.R.drawable.ic_dialog_alert
-                )
-                .setContentTitle(
-                    "Did you lock your car?"
-                )
-                .setContentText(
-                    "$selectedCarName disconnected and locking has not been confirmed."
-                )
-                .setPriority(
-                    NotificationCompat.PRIORITY_HIGH
-                )
-                .setAutoCancel(true)
-                .setOnlyAlertOnce(true)
-
-                //
-                // BUTTON 1
-                //
-                .addAction(
-                    android.R.drawable.ic_lock_lock,
-                    "I locked it",
-                    lockedPendingIntent
-                )
-
-                //
-                // BUTTON 2
-                //
-                .addAction(
-                    android.R.drawable.ic_menu_revert,
-                    "Keep unlocked",
-                    keepUnlockedPendingIntent
-                )
-
-                .apply {
-                    if (
-                        contentIntent != null
-                    ) {
-                        setContentIntent(
-                            contentIntent
-                        )
-                    }
-                }
-                .build()
-
+            return PendingIntent.getBroadcast(context, requestCode, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        }
+        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle(reminder.title)
+            .setContentText("Locksora · Locking has not been confirmed.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true).setOnlyAlertOnce(true)
+            .addAction(android.R.drawable.ic_lock_lock, "I locked it",
+                action(CarlockNotificationActionReceiver.ACTION_LOCKED, 3001))
+            .addAction(android.R.drawable.ic_menu_revert, "Keep unlocked",
+                action(CarlockNotificationActionReceiver.ACTION_KEEP_UNLOCKED, 3002))
+            .apply {
+                if (launch != null) setContentIntent(PendingIntent.getActivity(context, 0, launch,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+            }.build()
         try {
-            NotificationManagerCompat
-                .from(context)
-                .notify(
-                    NOTIFICATION_ID,
-                    notification
-                )
-        } catch (_: SecurityException) {
-            //
-            // Notification permission
-            // nie je povolená.
-            //
-        }
-    }
-
-    private fun createNotificationChannel(
-        context: Context
-    ) {
-        if (
-            Build.VERSION.SDK_INT <
-            Build.VERSION_CODES.O
-        ) {
-            return
-        }
-
-        val channel =
-            NotificationChannel(
-                CHANNEL_ID,
-                "Car lock reminders",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description =
-                    "Reminders when locking has not been confirmed."
-            }
-
-        val manager =
-            context.getSystemService(
-                NotificationManager::class.java
-            )
-
-        manager.createNotificationChannel(
-            channel
-        )
+            NotificationManagerCompat.from(context).notify(reminder.notificationTag, NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) { /* Notification permission is controlled by Android. */ }
     }
 
     companion object {
-        const val CHANNEL_ID =
-            "carlock_reminders"
-
-        const val NOTIFICATION_ID =
-            1001
-
-        private const val LOCKED_REQUEST_CODE =
-            3001
-
-        private const val KEEP_UNLOCKED_REQUEST_CODE =
-            3002
+        const val CHANNEL_ID = "carlock_reminders"
+        const val NOTIFICATION_ID = 1001
     }
 }

@@ -1,99 +1,154 @@
-# Locksora vehicle profiles and guide
+# Locksora fleet and global NFC
 
-This work starts from `codex/nfc-lock-confirmation` (stable NFC), without the
-separate lock-screen diagnostic changes.
+This branch extends `codex/locksora-vehicles-onboarding` without including the
+separate NFC lock-screen diagnostics branch. There is no manual active/primary
+vehicle selection or vehicle-specific NFC ownership.
 
-## Storage and native mapping
+## Exact native storage
 
-`src/data/vehicle-store.ts` stores one JSON document in existing AsyncStorage:
-`@locksora/vehicles:v1`, containing `vehicles` and `activeVehicleId`. Each vehicle
-has a stable ID, friendly name, Bluetooth name/address, optional NFC UID, and
-primary flag. Native `selectedCarName`, `selectedCarAddress`, and `nfcTagId` are
-imported as the first vehicle on upgrade. Migration and ordinary refreshes do
-not call the native selection setter or reset a confirmed lock.
+One JSON string under `fleet_state_v2` in existing `carlock_state`
+SharedPreferences is authoritative:
 
-Only one profile is monitored. `activateVehicle(name, address, nfcTagId)` writes
-the active profile's friendly name, Bluetooth MAC, and tag to the existing
-`carlock_state` SharedPreferences in one edit. MAC matching still takes priority
-in the existing receivers. A profile without a tag explicitly clears the native
-tag; switching back restores that profile's saved tag. Inactive profiles never
-participate in native scanning or notifications.
+```json
+{
+  "schemaVersion": 2,
+  "revision": 17,
+  "legacyProfilesImported": true,
+  "currentVehicleId": "vehicle-b",
+  "configuredNfcTags": ["TAG_A", "TAG_B"],
+  "vehicles": [{
+    "id": "vehicle-b",
+    "name": "Octavia",
+    "bluetoothAddress": "AA:BB:CC:DD:EE:FF",
+    "bluetoothName": "SKODA",
+    "locked": false,
+    "connected": false,
+    "lastEvent": "DISCONNECTED",
+    "lastEventAt": 123456789,
+    "lastDisconnectAt": 123456789,
+    "pending": true,
+    "state": "UNCONFIRMED"
+  }]
+}
+```
 
-When the Bluetooth address changes, the native setter uses the original
-selected-car reset policy: connected=false, locked=true, lastEvent=NONE,
-lastEventAt=0, and reminder cancellation. Same-address name/tag edits preserve
-the current connected/locked values. Refresh never probes an arbitrary Bluetooth
-profile to infer an unlock. Existing real connect/disconnect handling is intact.
+`pending` and `state` are derived when serializing and never trusted on decode.
+Pending means disconnected, unlocked, and backed by a real disconnect and a
+positive disconnect timestamp. Each mutation writes the entire JSON in one edit.
+`CarlockVehicleStore` serializes mutations and notification side effects with a
+process-wide monitor. Revision increases only on changes. Invalid JSON/schema
+raises an error instead of silently replacing saved data.
 
-Mutations are serialized. The desired profile is persisted with a temporary
-`nativeSyncPending` marker before native activation; successful activation clears
-it. Refresh repairs interrupted handoffs before importing native tag changes.
-Activation errors roll the stored selection back. Native NFC enrollment remains
-the tag source of truth for the active profile and is reconciled when JS resumes.
+JS issues metadata/confirmation commands and consumes `onFleetChanged` snapshots.
+It never writes live connection/lock state or copies a profile into legacy keys.
+A revision check prevents delayed RPC snapshots overwriting newer native events.
+There is no database or new production dependency.
 
-Adding a vehicle selects it automatically only when it is the first vehicle.
-Friendly names can be edited without losing the tag. Changing its Bluetooth
-device clears the tag to prevent accidental reuse. Duplicate Bluetooth addresses
-are rejected. The final vehicle cannot be deleted; an initially empty install
-shows an Add vehicle prompt. Deleting the active vehicle selects a configured
-replacement and restores its tag.
+## Bluetooth and automatic UI context
 
-## NFC enrollment and UI
+Manifest and foreground deliveries use the same `CarlockBluetoothReceiver` and
+`VehicleFleet.bluetooth` rules. Every registered nonempty MAC is eligible;
+matching is case-insensitive. Unknown devices are ignored. Name matching and
+the implicit CITROEN fallback are removed.
 
-Settings names the target vehicle before opening enrollment. Configuring an
-inactive profile explicitly makes it active first. The existing private native
-enrollment activity displays that vehicle's name and instructions. It reports an
-activity result through `onNfcEnrollmentFinished`, including successful scans of
-the same tag, so the UI can distinguish success from cancellation. Reconciliation
-also captures completed enrollment after process interruption. Enrollment still
-only saves the UID and never confirms a lock. Removing a tag never changes lock
-state.
+- Connection changes only that vehicle to connected=true, locked=false.
+- Disconnect changes only its connected flag and records its real disconnect.
+  If locking is unconfirmed, its reminder appears immediately. No alarm is scheduled.
+- Adapter OFF clears connection flags without changing locks, event history,
+  disconnect timestamps, or UI context. Adapter ON changes no vehicle state.
 
-Enrollment uses Android's public `NfcAdapter.ignore` API before returning to the
-main activity, so a tag held against the phone is suppressed until it is removed
-and tapped again. The debounce is 500 ms; physical-device validation is still
-needed for the controller's removal detection. This guard is confined to setup;
-normal NFC confirmation and background dispatch are unchanged.
+ACL/profile and foreground/manifest duplicates are idempotent. A late duplicate
+disconnect cannot undo NFC locking, refresh pending priority, repost a confirmed
+reminder, or steal UI context. Real event timestamps are monotonically increasing
+across the fleet, including same-millisecond events and wall-clock rollback.
 
-The application label and user-facing copy use Locksora. Package/application ID
-`com.danom.CarLock`, URL scheme, Expo slug/project ID, Kotlin classes/packages,
-native module name, preferences, notification 1001, legacy alarm identity, and
-repository name are unchanged.
+`currentVehicleId` follows the latest nonduplicate real configured-vehicle
+Bluetooth event. Settings and enrollment cannot select it. Confirmation changes
+the targeted state without switching context to an arbitrary vehicle: if Home
+shows an in-use vehicle, NFC can still confirm another genuinely pending vehicle.
+With no real event, Home waits for a connection instead of selecting the first
+vehicle. Settings shows all stored vehicle states.
 
-`src/components/locksora-guide.tsx` supplies six horizontally paged guide pages,
-pagination, Skip, Next, and Done. Home opens it automatically until Skip/Done is
-successfully persisted as `@locksora/guide-seen:v1=true`. The ? action reopens it.
-The guide states that passive NFC confirmation generally needs an unlocked
-Android phone and that the user must physically lock the vehicle first.
+New/unobserved vehicles retain the previous neutral defaults: connected=false,
+locked=true. Adding/editing cannot invent an unlock. Same-address renames preserve
+state; address changes reset only that vehicle and remove its old reminder.
+Deleting a current vehicle falls back to remaining real history; deleting the
+last vehicle leaves a safe empty registry and retains global tags.
 
-## Validation
+## Notifications and actions
 
-- `npm run test:vehicles`: model migration, tag isolation, add/edit/delete,
-  duplicate devices, native-failure rollback, serialized switches, and recovery
-  after interrupted switches/tag removal. Uses Node's test runner and TypeScript
-  stripping (Node 22.13+ as required by the Expo project).
-- `npx tsc --noEmit` checks the React/native interface and UI code.
-- `npx expo export --platform android` checks the Android JavaScript bundle.
-- A new APK is required for the Android app label, active-profile API, and
-  enrollment-result bridge. This is not an Expo Go-only or JS-only update.
+Each vehicle uses `(tag="vehicle:<id>", id=1001)` on the existing
+`carlock_reminders` channel. The title is `Did you lock <friendly name>?`.
+Different vehicles can have reminders visible simultaneously.
 
-Native Android compilation and physical-device checks require the Android
-SDK/JDK and a phone, which are unavailable on this workstation.
+Action extras carry `vehicleId` and `disconnectAt`; PendingIntent data URIs also
+include the vehicle ID, disconnect generation, and action. Extras alone do not
+differentiate PendingIntents. The receiver checks the originating vehicle is
+still pending at that generation. Stale actions cannot confirm or cancel a new
+trip; missing legacy extras never fall back to the current vehicle.
 
-Before release, check on a phone:
+`I locked it` confirms that origin; `Keep unlocked` only dismisses its reminder.
+Home manual confirmation uses the same ID/generation validation. Reconnection,
+confirmation, address change, and deletion remove only that vehicle's reminder.
+Cleanup also cancels old untagged notification 1001 and the exact legacy alarm
+PendingIntent (request code 2001, `CarlockReminderReceiver`). An old alarm delivery
+does not create an untargeted fleet reminder.
 
-1. Upgrade with a selected vehicle, saved NFC tag, and confirmed lock. Verify the
-   profile/tag migrates and no guide dismissal or profile refresh changes locking.
-2. Add another vehicle; the first stays active. Rename it, switch both ways, and
-   verify the appropriate Bluetooth MAC and NFC tag are used each time.
-3. Reconfigure using both the same tag and a different tag. Verify success feedback;
-   Back/cancel must leave the old tag intact. Enrollment must not set locked=true.
-4. Remove active/inactive tags and change a Bluetooth device. Verify no previous
-   vehicle's tag can confirm the new active vehicle.
-5. Verify selected connect → IN_CAR, disconnect → UNCONFIRMED + immediate reminder,
-   matching NFC → LOCKED + removal of notification 1001 and the legacy alarm.
-   Adapter OFF/ON and late duplicate disconnects must not overwrite confirmed locking.
-6. Exercise deletion of inactive/active profiles and the last-profile safeguard.
-   Kill/relaunch around a switch and enrollment, then verify reconciliation.
-7. On a fresh install verify onboarding; swipe all pages, Skip/Done, restart, and
-   reopen with ?. Check small screens, font scaling, scroll, and permission denial.
+## Global NFC
+
+Enrollment appends a deduplicated UID to `configuredNfcTags` without changing any
+vehicle or UI context. Tags survive vehicle add/edit/delete and address changes.
+Individual tags can be removed in Settings.
+
+A matching scan selects the pending vehicle with greatest `lastDisconnectAt`,
+sets only its locked=true, and removes its reminder plus legacy cleanup. Unknown
+tags and no-pending scans are no-ops. Another deliberate scan confirms the next
+pending vehicle. Confirmation does not blindly target the displayed vehicle.
+
+Foreground reader mode and `CarlockNfcActivity` intent dispatch still work through
+native persistence without a React runtime. Enrollment retains the public
+`NfcAdapter.ignore` fresh-tap guard before returning. Branding, guide pagination,
+first-launch persistence, and unlocked-phone NFC messaging are preserved. No
+lock-screen bypass, privileged API, or keepalive service is introduced.
+
+## Migration
+
+On first native access, legacy selectedCarName/selectedCarAddress, locked,
+connected, lastEvent/lastEventAt, and nfcTagId seed the fleet. Lock/connection state
+and real event context are preserved exactly; the old UID becomes global. A
+name-only record is retained but cannot match Bluetooth until given an address.
+
+On first upgraded JS launch, the existing `@locksora/vehicles:v1` AsyncStorage
+document is passed to native migration. All profiles merge by MAC. Native IDs
+and runtime state win on overlap; friendly metadata is imported. Every saved
+per-profile UID is unioned into global tags. Manual activeVehicleId and primary
+flags are ignored. Previously unobserved profiles use neutral defaults.
+
+The atomic `legacyProfilesImported` flag makes import idempotent, so deletion or
+tag removal cannot be undone by reimport. Old preferences and the JS document
+remain backups only. The onboarding seen flag is unchanged.
+
+Open the upgraded app once to import profiles previously stored only in JS.
+Before that launch, native background code can migrate only the old native
+selected-car fields; it cannot access an unopened JS AsyncStorage document.
+After import, every vehicle and tag is available with React closed.
+
+## Validation and release
+
+- `npm run test:vehicles` tests JS migration forwarding, native command boundaries,
+  targeted confirmation, queue recovery, and snapshot revision ordering.
+- `scripts/test-native-fleet.ps1` compiles/runs the actual production Kotlin
+  engine and codec on a JVM. See [native test instructions](../tests/native/README.md).
+- TypeScript, Android JS export, XML and whitespace checks are run separately.
+- Android adapters are compiled against Android API 36 and AndroidX Core. That
+  standalone compile excludes the Expo module bridge; a full Gradle/APK build
+  and physical-device testing remain required.
+
+A **new APK is required** for the native interface and storage changes. No push
+or merge has been performed.
+
+On a phone, verify A/B connections, unrelated headphones, simultaneous reminders,
+cross-target/stale actions, global tags, no-pending scans, foreground/background
+NFC, enrollment, power toggles, restarts, both old migration paths, and deleting
+all vehicles. Android must deliver the underlying event; force-stop, lock-screen,
+OEM, and notification-permission restrictions remain platform constraints.

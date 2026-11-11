@@ -1,8 +1,6 @@
 package expo.modules.carlockbluetooth
 
 import android.app.Activity
-import android.content.Context
-import android.content.Intent
 import android.graphics.Color
 import android.nfc.NfcAdapter
 import android.os.Bundle
@@ -10,18 +8,12 @@ import android.view.Gravity
 import android.widget.TextView
 import android.widget.Toast
 
-/** Private enrollment screen: a normal tag scan can never change the configured tag. */
+/** Enrollment appends a global tag and never confirms or selects a vehicle. */
 class CarlockNfcSetupActivity : Activity() {
-    private var selectedAddress: String? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        selectedAddress = getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
-            .getString("selectedCarAddress", null)
-        val vehicleName = getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
-            .getString("selectedCarName", "your vehicle")
         setContentView(TextView(this).apply {
-            text = "Configure NFC tag for $vehicleName\n\nHold the back of your phone near the NFC tag.\n\nPress Back to cancel."
+            text = "Add a Locksora NFC tag\n\nHold the back of your phone near the NFC tag.\n\nAny configured tag can confirm the vehicle you just left.\n\nPress Back to cancel."
             setBackgroundColor(Color.rgb(8, 27, 58))
             setTextColor(Color.rgb(234, 244, 255))
             gravity = Gravity.CENTER
@@ -33,22 +25,19 @@ class CarlockNfcSetupActivity : Activity() {
     override fun onResume() {
         super.onResume()
         val adapter = NfcAdapter.getDefaultAdapter(this)
-        if (adapter == null || !adapter.isEnabled || selectedAddress.isNullOrBlank()) {
-            Toast.makeText(this, "Select a car and enable NFC first.", Toast.LENGTH_LONG).show()
+        if (adapter == null || !adapter.isEnabled) {
+            Toast.makeText(this, "Enable NFC first.", Toast.LENGTH_LONG).show()
             finish()
             return
         }
         adapter.enableReaderMode(this, { tag ->
             runOnUiThread {
-                val prefs = getSharedPreferences("carlock_state", Context.MODE_PRIVATE)
                 val id = CarlockLockConfirmation.tagId(tag)
-                if (!isFinishing && id.isNotBlank() &&
-                    prefs.getString("selectedCarAddress", null) == selectedAddress) {
-                    prefs.edit().putString("nfcTagId", id).apply()
-                    // Require a fresh tap after enrollment, rather than confirming a tag
-                    // still held against the phone when the main activity resumes.
+                if (!isFinishing && id.isNotBlank()) {
+                    CarlockVehicleStore.addTag(this, id)
+                    // A fresh tap is required for confirmation after enrollment.
                     adapter.ignore(tag, 500, null, null)
-                    setResult(RESULT_OK, Intent().putExtra("address", selectedAddress))
+                    setResult(RESULT_OK)
                     Toast.makeText(this, "NFC tag configured successfully.", Toast.LENGTH_SHORT).show()
                     finish()
                 }

@@ -12,59 +12,86 @@ import { AppState } from "react-native";
 import CarlockBluetoothModule from "../../modules/carlock-bluetooth/src/CarlockBluetoothModule";
 import {
   createVehicleStore,
+  parseFleet,
+  newerFleet,
   type Vehicle,
+  type VehicleDraft,
   type VehicleState,
 } from "../data/vehicle-store";
 
 const store = createVehicleStore(AsyncStorage, CarlockBluetoothModule);
-type EnrollmentFeedback = { success: boolean; vehicleName: string } | null;
 type VehiclesContextValue = VehicleState & {
-  activeVehicle: Vehicle | undefined;
+  currentVehicle: Vehicle | undefined;
   ready: boolean;
   busy: boolean;
   error: string;
-  enrollmentFeedback: EnrollmentFeedback;
+  enrollmentFeedback: { success: boolean } | null;
   clearEnrollmentFeedback(): void;
   refresh(): Promise<VehicleState>;
-  save(vehicle: Vehicle): Promise<VehicleState>;
-  activate(id: string): Promise<VehicleState>;
+  save(vehicle: VehicleDraft): Promise<VehicleState>;
   remove(id: string): Promise<VehicleState>;
   removeTag(id: string): Promise<VehicleState>;
+  confirm(id: string, disconnectAt: number): Promise<VehicleState>;
 };
 const VehiclesContext = createContext<VehiclesContextValue | null>(null);
 
 export function VehiclesProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<VehicleState>({
+    schemaVersion: 2,
+    revision: -1,
     vehicles: [],
-    activeVehicleId: null,
+    configuredNfcTags: [],
+    currentVehicleId: null,
+    legacyProfilesImported: false,
   });
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [enrollmentFeedback, setEnrollmentFeedback] =
-    useState<EnrollmentFeedback>(null);
+  const [enrollmentFeedback, setEnrollmentFeedback] = useState<{
+    success: boolean;
+  } | null>(null);
   const pending = useRef(0);
-
-  const run = useCallback(async (operation: () => Promise<VehicleState>) => {
-    pending.current += 1;
-    setBusy(true);
-    try {
-      const next = await operation();
-      setState(next);
-      setError("");
-      return next;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save vehicles.");
-      throw err;
-    } finally {
-      pending.current -= 1;
-      setBusy(pending.current > 0);
-      setReady(true);
-    }
+  const accept = useCallback((next: VehicleState) => {
+    // A queued RPC must not overwrite a newer Bluetooth/NFC event snapshot.
+    setState((current) => newerFleet(current, next));
   }, []);
+  const run = useCallback(
+    async (operation: () => Promise<VehicleState>) => {
+      pending.current += 1;
+      setBusy(true);
+      try {
+        const next = await operation();
+        accept(next);
+        setError("");
+        return next;
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Could not update vehicles.",
+        );
+        throw err;
+      } finally {
+        pending.current -= 1;
+        setBusy(pending.current > 0);
+        setReady(true);
+      }
+    },
+    [accept],
+  );
   const refresh = useCallback(() => run(store.refresh), [run]);
 
   useEffect(() => {
+    const fleet = CarlockBluetoothModule.addListener(
+      "onFleetChanged",
+      (event) => {
+        try {
+          accept(parseFleet(event.stateJson));
+        } catch {
+          setError(
+            "Could not read the vehicle update. Please reopen Locksora.",
+          );
+        }
+      },
+    );
     refresh().catch(() => undefined);
     const appState = AppState.addEventListener("change", (next) => {
       if (next === "active") refresh().catch(() => undefined);
@@ -73,32 +100,23 @@ export function VehiclesProvider({ children }: { children: ReactNode }) {
       "onNfcEnrollmentFinished",
       (event) => {
         refresh()
-          .then((next) => {
-            const vehicle = next.vehicles.find(
-              (item) =>
-                item.bluetoothAddress?.toUpperCase() ===
-                event.address?.toUpperCase(),
-            );
-            setEnrollmentFeedback({
-              success: event.success,
-              vehicleName: vehicle?.name ?? "your vehicle",
-            });
-          })
+          .then(() => setEnrollmentFeedback({ success: event.success }))
           .catch(() => undefined);
       },
     );
     return () => {
+      fleet.remove();
       appState.remove();
       enrollment.remove();
     };
-  }, [refresh]);
+  }, [refresh, accept]);
 
   return (
     <VehiclesContext.Provider
       value={{
         ...state,
-        activeVehicle: state.vehicles.find(
-          (vehicle) => vehicle.id === state.activeVehicleId,
+        currentVehicle: state.vehicles.find(
+          (vehicle) => vehicle.id === state.currentVehicleId,
         ),
         ready,
         busy,
@@ -107,9 +125,10 @@ export function VehiclesProvider({ children }: { children: ReactNode }) {
         clearEnrollmentFeedback: () => setEnrollmentFeedback(null),
         refresh,
         save: (vehicle) => run(() => store.save(vehicle)),
-        activate: (id) => run(() => store.activate(id)),
         remove: (id) => run(() => store.remove(id)),
         removeTag: (id) => run(() => store.removeTag(id)),
+        confirm: (id, disconnectAt) =>
+          run(() => store.confirm(id, disconnectAt)),
       }}
     >
       {children}

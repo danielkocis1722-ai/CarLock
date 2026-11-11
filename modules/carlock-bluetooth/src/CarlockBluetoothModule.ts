@@ -1,60 +1,24 @@
 import { NativeModule, requireNativeModule } from "expo";
 
-export type CarConnectionChangedEvent = {
-  connected: boolean;
-  name: string | null;
-  address: string | null;
-};
-
-export type CarlockState = {
-  connected: boolean;
-  locked: boolean;
-  lastEvent: string | null;
-  lastEventAt: number;
-};
-
-export type SelectedCar = {
-  name: string | null;
-  address: string | null;
-};
-
 type CarlockBluetoothEvents = {
-  onCarConnectionChanged: (event: CarConnectionChangedEvent) => void;
-
+  onFleetChanged: (event: { stateJson: string }) => void;
   onBluetoothStateChanged: (event: { enabled: boolean }) => void;
-
-  onLockStateChanged: (event: { locked: boolean }) => void;
-
-  onNfcEnrollmentFinished: (event: {
-    success: boolean;
-    address: string | null;
-  }) => void;
+  onNfcEnrollmentFinished: (event: { success: boolean }) => void;
 };
-
 declare class CarlockBluetoothModule extends NativeModule<CarlockBluetoothEvents> {
-  isCarConnected(): Promise<boolean>;
-
-  isBluetoothEnabled(): Promise<boolean>;
-
-  requestEnableBluetooth(): Promise<boolean>;
-
-  getStoredState(): Promise<CarlockState>;
-
-  setLocked(locked: boolean): Promise<void>;
-
-  getNfcTagId(): Promise<string | null>;
-
-  configureNfcTag(): Promise<boolean>;
-
-  getSelectedCar(): Promise<SelectedCar>;
-
-  setSelectedCar(name: string, address: string): Promise<void>;
-
-  activateVehicle(
+  getFleetState(): Promise<string>;
+  importLegacyProfiles(raw: string | null): Promise<string>;
+  saveVehicle(
+    id: string,
     name: string,
     address: string,
-    nfcTagId: string | null,
-  ): Promise<void>;
+    bluetoothName: string | null,
+  ): Promise<string>;
+  deleteVehicle(id: string): Promise<string>;
+  confirmVehicle(id: string, disconnectAt: number): Promise<string>;
+  removeNfcTag(tagId: string): Promise<string>;
+  isBluetoothEnabled(): Promise<boolean>;
+  requestEnableBluetooth(): Promise<boolean>;
+  configureNfcTag(): Promise<boolean>;
 }
-
 export default requireNativeModule<CarlockBluetoothModule>("CarlockBluetooth");
